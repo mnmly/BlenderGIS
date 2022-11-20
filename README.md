@@ -6,6 +6,13 @@ Note : Since 2022, the OpenTopography web service requires an API key. Please re
 
 
 [Wiki](https://github.com/domlysz/BlenderGIS/wiki/Home) - [FAQ](https://github.com/domlysz/BlenderGIS/wiki/FAQ) - [Quick start guide](https://github.com/domlysz/BlenderGIS/wiki/Quick-start) - [Flowchart](https://raw.githubusercontent.com/wiki/domlysz/blenderGIS/flowchart.jpg)
+
+### Additional installation for LIDAR support
+
+```
+sudo /Applications/Blender.app/Contents/Resources/3.3/python/bin/python3.10 -m pip install laspy laszip pyproj --target /Applications/Blender.app/Contents/Resources/3.3/python/lib/python3.10/site-packages
+```
+
 --------------------
 
 ## Functionalities overview

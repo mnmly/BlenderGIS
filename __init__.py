@@ -51,6 +51,7 @@ IMPORT_GEORASTER = True
 IMPORT_OSM = True
 IMPORT_SHP = True
 IMPORT_ASC = True
+IMPORT_LAZ = True
 DELAUNAY = True
 TERRAIN_NODES = True
 TERRAIN_RECLASS = True
@@ -153,6 +154,8 @@ if IMPORT_SHP:
 	from .operators import io_import_shp
 if IMPORT_ASC:
 	from .operators import io_import_asc
+if IMPORT_LAZ:
+	from .operators import io_import_laz
 if DELAUNAY:
 	from .operators import mesh_delaunay_voronoi
 if TERRAIN_NODES:
@@ -200,6 +203,8 @@ class VIEW3D_MT_menu_gis_import(bpy.types.Menu):
 			self.layout.operator("importgis.osm_file", icon_value=icons_dict["osm"].icon_id, text="Open Street Map xml (.osm)")
 		if IMPORT_ASC:
 			self.layout.operator('importgis.asc_file', icon_value=icons_dict["asc"].icon_id, text="ESRI ASCII Grid (.asc)")
+		if IMPORT_LAZ:
+			self.layout.operator('importgis.laz', icon_value=icons_dict["raster"].icon_id, text="LIDAR (.las .laz)")
 
 class VIEW3D_MT_menu_gis_export(bpy.types.Menu):
 	bl_label = "Export"
@@ -318,6 +323,8 @@ def register():
 		io_import_osm.register()
 	if IMPORT_ASC:
 		io_import_asc.register()
+	if IMPORT_LAZ:
+		io_import_laz.register()
 	if DELAUNAY:
 		mesh_delaunay_voronoi.register()
 	if DROP:
