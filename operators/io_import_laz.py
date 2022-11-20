@@ -283,6 +283,14 @@ class IMPORTLAZ_OT_georaster(Operator, ImportHelper):
 		pc = bpy.data.meshes.new("Point Cloud")
 		verts = self.scaled_dimension(las)
 		pc.from_pydata(verts, [], [])
+		attribute_keys = ['classification', 'return_number', 'number_of_returns', 'point_source_id', 'gps_time']
+		attribute_type = ['INT',			'INT8', 		  'INT8', 			   'INT',			 'FLOAT']
+		# attribute_keys = ['point_source_id']
+		# attribute_type = ['INT']
+		for (i, key) in enumerate(attribute_keys):
+			if key in las.point_format.dimension_names:
+				pc.attributes.new(name=key, type=attribute_type[i], domain="POINT")
+				pc.attributes[key].data.foreach_set("value", np.array(las[key]).tolist())
 		obj = placeObj(pc, name)
 		return {'FINISHED'}
 
@@ -290,11 +298,11 @@ class IMPORTLAZ_OT_georaster(Operator, ImportHelper):
 		target_crs = pyproj.CRS.from_string('EPSG:3857')
 		source_crs = las_file.header.parse_crs()
 		projecter = pyproj.Transformer.from_crs(source_crs, target_crs, always_xy=True)
-		xyz = (las_file.xyz * las_file.header.scale) + las_file.header.offsets
-		# x, y = projecter.transform(xyz[:,0], xyz[:,1])	
-		# xyz[:,0] = x
-		# xyz[:,1] = y
-		return [Vector(item) for item in xyz]
+		xyz = las_file.xyz
+		x, y = projecter.transform(xyz[:,0], xyz[:,1])	
+		xyz[:,0] = x
+		xyz[:,1] = y
+		return [item for item in xyz]
 
 
 def register():
