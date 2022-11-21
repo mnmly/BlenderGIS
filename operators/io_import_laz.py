@@ -51,7 +51,7 @@ from ..core.proj import Reproj
 
 
 from bpy_extras.io_utils import ImportHelper #helper class defines filename and invoke() function which calls the file selector
-from bpy.props import StringProperty, BoolProperty, EnumProperty, IntProperty
+from bpy.props import StringProperty, BoolProperty, EnumProperty, IntProperty, CollectionProperty
 from bpy.types import Operator
 
 py_path = Path(sys.prefix) / "bin"
@@ -95,9 +95,19 @@ class IMPORTLAZ_OT_georaster(Operator, ImportHelper):
 	# Raster CRS definition
 	def listPredefCRS(self, context):
 		return PredefCRS.getEnumItems()
+
+	files: CollectionProperty(
+		type = bpy.types.OperatorFileListElement,
+		options = {'HIDDEN', 'SKIP_SAVE'}
+	)
 	rastCRS: EnumProperty(
 		name = "Raster CRS",
 		description = "Choose a Coordinate Reference System",
+		items = listPredefCRS,
+		)
+	fallbackCRS: EnumProperty(
+		name = "Fallback CRS",
+		description = "Choose a Coordinate Reference System when LIDAR data doesn't contain CRS metadata",
 		items = listPredefCRS,
 		)
 	reprojection: BoolProperty(
@@ -213,6 +223,7 @@ class IMPORTLAZ_OT_georaster(Operator, ImportHelper):
 			georefManagerLayout(self, context)
 		else:
 			self.crsInputLayout(context)
+		self.fallbackCRSInputLayout(context)
 
 	def crsInputLayout(self, context):
 		layout = self.layout
@@ -220,6 +231,14 @@ class IMPORTLAZ_OT_georaster(Operator, ImportHelper):
 		split = row.split(factor=0.35, align=True)
 		split.label(text='CRS:')
 		split.prop(self, "rastCRS", text='')
+		row.operator("bgis.add_predef_crs", text='', icon='ADD')
+
+	def fallbackCRSInputLayout(self, context):
+		layout = self.layout
+		row = layout.row(align=True)
+		split = row.split(factor=0.35, align=True)
+		split.label(text='Fallback CRS:')
+		split.prop(self, "fallbackCRS", text='')
 		row.operator("bgis.add_predef_crs", text='', icon='ADD')
 
 	@classmethod
@@ -266,37 +285,43 @@ class IMPORTLAZ_OT_georaster(Operator, ImportHelper):
 			rprjToScene = None
 
 		#Path
-		filePath = self.filepath
-		name = os.path.basename(filePath)[:-4]
+		for f in self.files:
+			filePath = os.path.join(os.path.dirname(self.filepath), f.name)
+			name = os.path.basename(filePath)[:-4]
+			#Import
+			try:
+				las = laspy.read(filePath)
+			except IOError as e:
+				log.error("Unable to open raster", exc_info=True)
+				self.report({'ERROR'}, "Unable to open raster, check logs for more infos")
+				return {'CANCELLED'}
+			except OverlapError:
+				self.report({'ERROR'}, "Non overlap data")
+				return {'CANCELLED'}
 
-        #Import
-		try:
-			las = laspy.read(filePath)
-		except IOError as e:
-			log.error("Unable to open raster", exc_info=True)
-			self.report({'ERROR'}, "Unable to open raster, check logs for more infos")
-			return {'CANCELLED'}
-		except OverlapError:
-			self.report({'ERROR'}, "Non overlap data")
-			return {'CANCELLED'}
-
-		pc = bpy.data.meshes.new("Point Cloud")
-		verts = self.scaled_dimension(las)
-		pc.from_pydata(verts, [], [])
-		attribute_keys = ['classification', 'return_number', 'number_of_returns', 'point_source_id', 'gps_time']
-		attribute_type = ['INT',			'INT8', 		  'INT8', 			   'INT',			 'FLOAT']
-		# attribute_keys = ['point_source_id']
-		# attribute_type = ['INT']
-		for (i, key) in enumerate(attribute_keys):
-			if key in las.point_format.dimension_names:
-				pc.attributes.new(name=key, type=attribute_type[i], domain="POINT")
-				pc.attributes[key].data.foreach_set("value", np.array(las[key]).tolist())
-		obj = placeObj(pc, name)
+			pc = bpy.data.meshes.new("Point Cloud")
+			verts = self.scaled_dimension(las, self.fallbackCRS)
+			pc.from_pydata(verts, [], [])
+			attribute_keys = ['classification', 
+			#'return_number', 'number_of_returns', 'point_source_id', 'gps_time'
+			]
+			attribute_type = ['INT',
+			#			'INT8', 		  'INT8', 			   'INT',			 'FLOAT'
+			]
+			for (i, key) in enumerate(attribute_keys):
+				if key in las.point_format.dimension_names:
+					pc.attributes.new(name=key, type=attribute_type[i], domain="POINT")
+					pc.attributes[key].data.foreach_set("value", np.array(las[key]).tolist())
+			obj = placeObj(pc, name)
+			obj.location.x = -geoscn.crsx
+			obj.location.y = -geoscn.crsy
 		return {'FINISHED'}
 
-	def scaled_dimension(self, las_file):
+	def scaled_dimension(self, las_file, fallbackCRS):
 		target_crs = pyproj.CRS.from_string('EPSG:3857')
 		source_crs = las_file.header.parse_crs()
+		if source_crs == None:
+			source_crs = pyproj.CRS.from_string(fallbackCRS)
 		projecter = pyproj.Transformer.from_crs(source_crs, target_crs, always_xy=True)
 		xyz = las_file.xyz
 		x, y = projecter.transform(xyz[:,0], xyz[:,1])	
