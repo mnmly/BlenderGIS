@@ -322,6 +322,7 @@ class IMPORTLAZ_OT_georaster(Operator, ImportHelper):
 		target_crs = pyproj.CRS.from_string('EPSG:3857' if targetCRS == None else targetCRS)
 		source_crs = las_file.header.parse_crs()
 		if source_crs == None:
+			self.report({'ERROR'}, "Source CRS was not detected, assingning Fallback CRS " + fallbackCRS)
 			source_crs = pyproj.CRS.from_string(fallbackCRS)
 		projecter = pyproj.Transformer.from_crs(source_crs, target_crs, always_xy=True)
 		xyz = las_file.xyz
