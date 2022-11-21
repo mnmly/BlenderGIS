@@ -300,7 +300,7 @@ class IMPORTLAZ_OT_georaster(Operator, ImportHelper):
 				return {'CANCELLED'}
 
 			pc = bpy.data.meshes.new("Point Cloud")
-			verts = self.scaled_dimension(las, self.fallbackCRS)
+			verts = self.scaled_dimension(las, geoscn.crs if geoscn.hasCRS else None, self.fallbackCRS)
 			pc.from_pydata(verts, [], [])
 			attribute_keys = ['classification', 
 			#'return_number', 'number_of_returns', 'point_source_id', 'gps_time'
@@ -313,12 +313,13 @@ class IMPORTLAZ_OT_georaster(Operator, ImportHelper):
 					pc.attributes.new(name=key, type=attribute_type[i], domain="POINT")
 					pc.attributes[key].data.foreach_set("value", np.array(las[key]).tolist())
 			obj = placeObj(pc, name)
-			obj.location.x = -geoscn.crsx
-			obj.location.y = -geoscn.crsy
+			if geoscn.crsx != None:
+				obj.location.x = -geoscn.crsx
+				obj.location.y = -geoscn.crsy
 		return {'FINISHED'}
 
-	def scaled_dimension(self, las_file, fallbackCRS):
-		target_crs = pyproj.CRS.from_string('EPSG:3857')
+	def scaled_dimension(self, las_file, targetCRS, fallbackCRS):
+		target_crs = pyproj.CRS.from_string('EPSG:3857' if targetCRS == None else targetCRS)
 		source_crs = las_file.header.parse_crs()
 		if source_crs == None:
 			source_crs = pyproj.CRS.from_string(fallbackCRS)
