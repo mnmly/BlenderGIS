@@ -8,10 +8,12 @@ Note : Since 2022, the OpenTopography web service requires an API key. Please re
 [Wiki](https://github.com/domlysz/BlenderGIS/wiki/Home) - [FAQ](https://github.com/domlysz/BlenderGIS/wiki/FAQ) - [Quick start guide](https://github.com/domlysz/BlenderGIS/wiki/Quick-start) - [Flowchart](https://raw.githubusercontent.com/wiki/domlysz/blenderGIS/flowchart.jpg)
 
 ### Additional installation for LIDAR support
+**Change the python path accordingly to your own Blender path**
+```
+sudo /Applications/Blender.app/Contents/Resources/3.3/python/bin/python3.10 -m pip install laspy laszip laspyproj lazrs --target /Applications/Blender.app/Contents/Resources/3.3/python/lib/python3.10/site-packages
+```
 
-```
-sudo /Applications/Blender.app/Contents/Resources/3.3/python/bin/python3.10 -m pip install laspy laszip pyproj --target /Applications/Blender.app/Contents/Resources/3.3/python/lib/python3.10/site-packages
-```
+![las-usage](https://user-images.githubusercontent.com/317202/221855574-bf90814f-0a9a-40a6-8347-d2de6a48e6a5.gif)
 
 --------------------
 
