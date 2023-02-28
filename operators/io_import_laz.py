@@ -51,7 +51,7 @@ from ..core.proj import Reproj
 
 
 from bpy_extras.io_utils import ImportHelper #helper class defines filename and invoke() function which calls the file selector
-from bpy.props import StringProperty, BoolProperty, EnumProperty, IntProperty, CollectionProperty
+from bpy.props import StringProperty, BoolProperty, EnumProperty, IntProperty, CollectionProperty, FloatProperty
 from bpy.types import Operator
 
 py_path = Path(sys.prefix) / "bin"
@@ -110,22 +110,23 @@ class IMPORTLAZ_OT_georaster(Operator, ImportHelper):
 		description = "Choose a Coordinate Reference System when LIDAR data doesn't contain CRS metadata",
 		items = listPredefCRS,
 		)
+	
+	import_scale: FloatProperty(
+		name = "Import Scale",
+		description = "To use a custom import scale, change this value",
+		default=1.0
+	)
+
+	auto_centre: BoolProperty(
+		name = "Auto Centre On Import",
+		description = "If enabled, automatically centers the cloud on import.",
+		default=False
+	)
+
 	reprojection: BoolProperty(
 			name="Specifiy raster CRS",
 			description="Specifiy raster CRS if it's different from scene CRS",
 			default=False )
-
-	# List of operator properties, the attributes will be assigned
-	# to the class instance from the operator settings before calling.
-	importMode: EnumProperty(
-			name="Mode",
-			description="Select import mode",
-			items=[ ('PLANE', 'Basemap on new plane', "Place raster texture on new plane mesh"),
-			('BKG', 'Basemap as background', "Place raster as background image"),
-			('MESH', 'Basemap on mesh', "UV map raster on an existing mesh"),
-			('DEM', 'DEM as displacement texture', "Use DEM raster as height texture to wrap a base mesh"),
-			('DEM_RAW', 'DEM raw data build [slow]', "Import a DEM as pixels points cloud with building faces. Do not use with huge dataset.")]
-			)
 	#
 	objectsLst: EnumProperty(attr="obj_list", name="Objects", description="Choose object to edit", items=listObjects)
 	#
@@ -175,45 +176,8 @@ class IMPORTLAZ_OT_georaster(Operator, ImportHelper):
 	def draw(self, context):
 		#Function used by blender to draw the panel.
 		layout = self.layout
-		layout.prop(self, 'importMode')
 		scn = bpy.context.scene
 		geoscn = GeoScene(scn)
-		#
-		if self.importMode == 'PLANE':
-			pass
-		#
-		if self.importMode == 'BKG':
-			pass
-		#
-		if self.importMode == 'MESH':
-			if geoscn.isGeoref and len(self.objectsLst) > 0:
-				layout.prop(self, 'objectsLst')
-			else:
-				layout.label(text="There isn't georef mesh to UVmap on")
-		#
-		if self.importMode == 'DEM':
-			layout.prop(self, 'demOnMesh')
-			if self.demOnMesh:
-				if geoscn.isGeoref and len(self.objectsLst) > 0:
-					layout.prop(self, 'objectsLst')
-					layout.prop(self, 'clip')
-				else:
-					layout.label(text="There isn't georef mesh to apply on")
-			layout.prop(self, 'subdivision')
-			layout.prop(self, 'demInterpolation')
-			if self.subdivision == 'mesh':
-				layout.prop(self, 'step')
-			layout.prop(self, 'fillNodata')
-		#
-		if self.importMode == 'DEM_RAW':
-			layout.prop(self, 'buildFaces')
-			layout.prop(self, 'step')
-			layout.prop(self, 'clip')
-			if self.clip:
-				if geoscn.isGeoref and len(self.objectsLst) > 0:
-					layout.prop(self, 'objectsLst')
-				else:
-					layout.label(text="There isn't georef mesh to refer")
 		#
 		if geoscn.isPartiallyGeoref:
 			layout.prop(self, 'reprojection')
@@ -224,6 +188,8 @@ class IMPORTLAZ_OT_georaster(Operator, ImportHelper):
 		else:
 			self.crsInputLayout(context)
 		self.fallbackCRSInputLayout(context)
+		self.importScaleInputLayout(context)
+		self.autoCentreInputLayout(context)
 
 	def crsInputLayout(self, context):
 		layout = self.layout
@@ -240,6 +206,16 @@ class IMPORTLAZ_OT_georaster(Operator, ImportHelper):
 		split.label(text='Fallback CRS:')
 		split.prop(self, "fallbackCRS", text='')
 		row.operator("bgis.add_predef_crs", text='', icon='ADD')
+
+	def importScaleInputLayout(self, context):
+		layout = self.layout
+		row = layout.row(align=True)
+		row.prop(self, "import_scale")
+
+	def autoCentreInputLayout(self, context):
+		layout = self.layout
+		row = layout.row(align=True)
+		row.prop(self, "auto_centre")
 
 	@classmethod
 	def poll(cls, context):
@@ -284,6 +260,14 @@ class IMPORTLAZ_OT_georaster(Operator, ImportHelper):
 			rprjToRaster = None
 			rprjToScene = None
 
+		common_prefix = os.path.commonprefix([f.name for f in self.files])
+		parent_obj = bpy.data.objects.new(common_prefix, None)
+		parent_obj.empty_display_type = 'PLAIN_AXES'   
+		bpy.context.scene.collection.objects.link(parent_obj)
+		bpy.context.view_layer.objects.active = parent_obj
+		parent_obj.select_set(True)
+		midpoint_list = []
+		objects = []
 		#Path
 		for f in self.files:
 			filePath = os.path.join(os.path.dirname(self.filepath), f.name)
@@ -300,8 +284,16 @@ class IMPORTLAZ_OT_georaster(Operator, ImportHelper):
 				return {'CANCELLED'}
 
 			pc = bpy.data.meshes.new("Point Cloud")
-			verts = self.scaled_dimension(las, geoscn.crs if geoscn.hasCRS else None, self.fallbackCRS)
-			pc.from_pydata(verts, [], [])
+			verts, coords, source_crs, is_fallback = self.scaled_dimension(las, geoscn.crs if geoscn.hasCRS else None, self.fallbackCRS)
+			verts = verts * self.import_scale
+			min_coords = coords[0] * self.import_scale
+			max_coords = coords[1] * self.import_scale
+			midpoint = min_coords + (max_coords - min_coords) * 0.5
+			midpoint_list.append(midpoint)
+			delta_coords = max_coords - min_coords
+			normalised_coords = (verts - min_coords - delta_coords / 2.0) / (delta_coords / 2.0)
+			coords = normalised_coords * delta_coords / 2.0 # TODO FIX
+			pc.from_pydata(coords, [], [])
 			attribute_keys = ['classification', 
 			#'return_number', 'number_of_returns', 'point_source_id', 'gps_time'
 			]
@@ -313,23 +305,98 @@ class IMPORTLAZ_OT_georaster(Operator, ImportHelper):
 					pc.attributes.new(name=key, type=attribute_type[i], domain="POINT")
 					pc.attributes[key].data.foreach_set("value", np.array(las[key]).tolist())
 			obj = placeObj(pc, name)
+			obj.location.x = midpoint[0]
+			obj.location.y = midpoint[1]
+			obj.location.z = midpoint[2]
+			obj['laz_midpoint'] = midpoint
+			obj['source_crs'] = source_crs.name
+			obj['is_fallback'] = is_fallback
+			obj['import_scale'] = self.import_scale
 			if geoscn.crsx != None:
 				obj.location.x = -geoscn.crsx
 				obj.location.y = -geoscn.crsy
+			self.assign_geometry_node(obj)
+			objects.append(obj)
+		midpoint_mean = np.mean(midpoint_list, axis=0)
+		parent_obj.location.x = midpoint_mean[0]
+		parent_obj.location.y = midpoint_mean[1]
+		parent_obj.location.z = midpoint_mean[2]
+		parent_obj['laz_midpoint'] = midpoint_mean
+
+		# Add this line
+		bpy.context.evaluated_depsgraph_get().update()
+		for obj in objects:
+			# mat_world = obj.matrix_world.copy()
+			obj.parent_type = 'OBJECT'
+			obj.parent = parent_obj
+			obj.matrix_parent_inverse = parent_obj.matrix_world.inverted()
+			# obj.matrix_world = mat_world
 		return {'FINISHED'}
 
+	def assign_geometry_node(self, obj):
+		bpy.ops.object.modifier_add(type='NODES')  
+
+		node_group_name = "Point Cloud Visualisation Node"
+		if node_group_name in bpy.data.node_groups:
+			node_group = bpy.data.node_groups[node_group_name]
+		else:
+			node_group = self.new_pointcloud_geometry_node_group()
+		modifier = obj.modifiers.new(node_group_name, 'NODES')
+		modifier.node_group = node_group
+
+	def new_pointcloud_geometry_node_group(self):
+		''' Create a new empty node group that can be used
+			in a GeometryNodes modifier.
+		'''
+		node_group = bpy.data.node_groups.new('Point Cloud Visualisation Node', 'GeometryNodeTree')
+		inNode = node_group.nodes.new('NodeGroupInput')
+		node_group.outputs.new('NodeSocketGeometry', 'Geometry')
+		outNode = node_group.nodes.new('NodeGroupOutput')
+		node_group.inputs.new('NodeSocketGeometry', 'Geometry')
+		node_group.links.new(inNode.outputs['Geometry'], outNode.inputs['Geometry'])
+		inNode.location = Vector((-1.5*inNode.width, 0))
+		outNode.location = Vector((1.5*outNode.width, 0))
+		nodes = node_group.nodes
+		group_in = nodes.get('Group Input')
+		group_out = nodes.get('Group Output')
+		new_node = nodes.new('GeometryNodeMeshToPoints')
+		node_group.links.new(group_in.outputs['Geometry'], new_node.inputs['Mesh'])
+		node_group.links.new(new_node.outputs['Points'], group_out.inputs['Geometry'])
+		return node_group
+
 	def scaled_dimension(self, las_file, targetCRS, fallbackCRS):
+
 		target_crs = pyproj.CRS.from_string('EPSG:3857' if targetCRS == None else targetCRS)
-		source_crs = las_file.header.parse_crs()
+		is_fallback = False
+
+		try:
+			source_crs = las_file.header.parse_crs()
+		except pyproj.exceptions.CRSError:
+			source_crs = None
 		if source_crs == None:
 			self.report({'ERROR'}, "Source CRS was not detected, assingning Fallback CRS " + fallbackCRS)
 			source_crs = pyproj.CRS.from_string(fallbackCRS)
+			is_fallback = True
+
 		projecter = pyproj.Transformer.from_crs(source_crs, target_crs, always_xy=True)
+
 		xyz = las_file.xyz
-		x, y = projecter.transform(xyz[:,0], xyz[:,1])	
+		min_coords = np.array([las_file.header.x_min, las_file.header.y_min, las_file.header.z_min]).reshape(1, 3)
+		max_coords = np.array([las_file.header.x_max, las_file.header.y_max, las_file.header.z_max]).reshape(1, 3)
+
+		x, y = projecter.transform(xyz[:,0], xyz[:,1])
+		min_x, min_y = projecter.transform(min_coords[:,0], min_coords[:,1])
+		max_x, max_y = projecter.transform(max_coords[:,0], max_coords[:,1])
+
 		xyz[:,0] = x
 		xyz[:,1] = y
-		return [item for item in xyz]
+		min_coords[:,0] = min_x
+		min_coords[:,1] = min_y
+		max_coords[:,0] = max_x
+		max_coords[:,1] = max_y
+		xyz = np.array([item for item in xyz])
+		coords = (min_coords[0], max_coords[0])
+		return (xyz, coords, source_crs, is_fallback)
 
 
 def register():
