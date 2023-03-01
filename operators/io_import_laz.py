@@ -312,56 +312,193 @@ class IMPORTLAZ_OT_georaster(Operator, ImportHelper):
 			obj['source_crs'] = source_crs.name
 			obj['is_fallback'] = is_fallback
 			obj['import_scale'] = self.import_scale
-			if geoscn.crsx != None:
-				obj.location.x = -geoscn.crsx
-				obj.location.y = -geoscn.crsy
-			self.assign_geometry_node(obj)
+			self.assign_geometry_node(obj, context)
 			objects.append(obj)
+
 		midpoint_mean = np.mean(midpoint_list, axis=0)
 		parent_obj.location.x = midpoint_mean[0]
 		parent_obj.location.y = midpoint_mean[1]
 		parent_obj.location.z = midpoint_mean[2]
 		parent_obj['laz_midpoint'] = midpoint_mean
 
-		# Add this line
 		bpy.context.evaluated_depsgraph_get().update()
+
 		for obj in objects:
 			# mat_world = obj.matrix_world.copy()
 			obj.parent_type = 'OBJECT'
 			obj.parent = parent_obj
 			obj.matrix_parent_inverse = parent_obj.matrix_world.inverted()
-			# obj.matrix_world = mat_world
+
+		# bpy.context.evaluated_depsgraph_get().update()
+
+		if not geoscn.isGeoref:
+			dx, dy = midpoint_mean[0], midpoint_mean[1]
+			geoscn.setOriginPrj(dx, dy)
+
+		if geoscn.crsx != None:
+			parent_obj.location.x -= geoscn.crsx
+			parent_obj.location.y -= geoscn.crsy
+
 		return {'FINISHED'}
 
-	def assign_geometry_node(self, obj):
-		bpy.ops.object.modifier_add(type='NODES')  
-
+	def assign_geometry_node(self, obj, context):
 		node_group_name = "Point Cloud Visualisation Node"
 		if node_group_name in bpy.data.node_groups:
 			node_group = bpy.data.node_groups[node_group_name]
 		else:
-			node_group = self.new_pointcloud_geometry_node_group()
+			material_pointcloud = self.new_pointcloud_material()
+			node_group = self.new_pointcloud_geometry_node_group(context, material_pointcloud)
 		modifier = obj.modifiers.new(node_group_name, 'NODES')
 		modifier.node_group = node_group
 
-	def new_pointcloud_geometry_node_group(self):
+	def place_node_alongside(self, node, other, padding, y = None):
+		node.location.x = other.location.x + other.width + padding
+		node.location.y = 0.0 if y == None else other.location.y
+	
+	def place_node_below(self, node, other, padding):
+		node.location.x = other.location.x
+		node.location.y = other.location.y - other.height - padding
+
+	def new_pointcloud_material(self):
+		material_id = 'M_PointCloud'
+		mat = bpy.data.materials.get(material_id)
+		if mat != None:
+			return mat
+
+		mat = bpy.data.materials.new(name=material_id)
+		mat.use_nodes = True
+		if mat.node_tree:
+			mat.node_tree.links.clear()
+			mat.node_tree.nodes.clear()
+		
+		nodes = mat.node_tree.nodes
+		links = mat.node_tree.links
+
+		node_attributes = nodes.new('ShaderNodeAttribute')
+		node_texture = nodes.new('ShaderNodeTexImage')
+		shader = nodes.new(type='ShaderNodeBsdfPrincipled')
+		output = nodes.new(type='ShaderNodeOutputMaterial')
+
+		node_attributes.attribute_type = 'GEOMETRY'
+		node_attributes.attribute_name = 'geo_uv_texture'
+
+		links.new(node_attributes.outputs['Vector'], node_texture.inputs['Vector'])
+		links.new(node_texture.outputs['Color'], shader.inputs['Base Color'])
+		links.new(shader.outputs['BSDF'], output.inputs['Surface'])
+
+		# Set locations 
+		padding = 50
+		node_attributes.location.x = 0
+		self.place_node_alongside(node_texture, node_attributes, padding)
+		self.place_node_alongside(shader, node_texture, padding)
+		self.place_node_alongside(output, shader, padding)
+
+		for n in nodes:
+			n.location.y = 0
+
+	def node_for_type(self, sources, source_name, type_name):
+		return [source for source in sources if source.type == type_name and source.name == source_name][0]
+
+	def new_pointcloud_geometry_node_group(self, context, material_pointcloud):
 		''' Create a new empty node group that can be used
 			in a GeometryNodes modifier.
 		'''
 		node_group = bpy.data.node_groups.new('Point Cloud Visualisation Node', 'GeometryNodeTree')
-		inNode = node_group.nodes.new('NodeGroupInput')
-		node_group.outputs.new('NodeSocketGeometry', 'Geometry')
-		outNode = node_group.nodes.new('NodeGroupOutput')
-		node_group.inputs.new('NodeSocketGeometry', 'Geometry')
-		node_group.links.new(inNode.outputs['Geometry'], outNode.inputs['Geometry'])
-		inNode.location = Vector((-1.5*inNode.width, 0))
-		outNode.location = Vector((1.5*outNode.width, 0))
 		nodes = node_group.nodes
-		group_in = nodes.get('Group Input')
-		group_out = nodes.get('Group Output')
-		new_node = nodes.new('GeometryNodeMeshToPoints')
-		node_group.links.new(group_in.outputs['Geometry'], new_node.inputs['Mesh'])
-		node_group.links.new(new_node.outputs['Points'], group_out.inputs['Geometry'])
+		links = node_group.links
+
+		group_in = nodes.new('NodeGroupInput')
+		group_out = nodes.new('NodeGroupOutput')
+		node_mesh_to_points = nodes.new('GeometryNodeMeshToPoints')
+		node_set_material = nodes.new('GeometryNodeSetMaterial')
+		node_store_named_attribute = nodes.new('GeometryNodeStoreNamedAttribute')
+
+		node_self_object = nodes.new('GeometryNodeSelfObject')
+		node_self_position = nodes.new('GeometryNodeInputPosition')
+		node_self_object_info = nodes.new('GeometryNodeObjectInfo')
+		node_self_add = nodes.new('ShaderNodeVectorMath')
+		node_self_add.operation = 'ADD'
+
+		node_ref_object_info = nodes.new('GeometryNodeObjectInfo')
+		node_ref_position = nodes.new('GeometryNodeInputPosition')
+		node_ref_stats = nodes.new('GeometryNodeAttributeStatistic')
+		node_ref_stats.data_type = 'FLOAT_VECTOR'
+		node_ref_stats.domain = 'POINT'
+
+		node_subtract_01 = nodes.new('ShaderNodeVectorMath')
+		node_subtract_02 = nodes.new('ShaderNodeVectorMath')
+		node_divide = nodes.new('ShaderNodeVectorMath')
+		node_subtract_01.operation = 'SUBTRACT'
+		node_subtract_02.operation = 'SUBTRACT'
+		node_divide.operation = 'DIVIDE'
+
+		# Set properties
+		node_group.outputs.new('NodeSocketGeometry', 'Geometry')
+		node_group.inputs.new('NodeSocketGeometry', 'Geometry')
+		node_mesh_to_points.inputs['Radius'].default_value = 0.5
+
+		node_store_named_attribute.data_type = 'FLOAT_VECTOR'
+		node_store_named_attribute.domain = 'POINT'
+
+		# Set links
+		### Geometry
+		links.new(group_in.outputs['Geometry'], node_mesh_to_points.inputs['Mesh'])
+		links.new(node_mesh_to_points.outputs['Points'], node_set_material.inputs['Geometry'])
+		links.new(node_set_material.outputs['Geometry'], node_store_named_attribute.inputs['Geometry'])
+		node_set_material.inputs['Material'].default_value = material_pointcloud
+		links.new(node_store_named_attribute.outputs['Geometry'], group_out.inputs['Geometry'])
+
+		### Store Value
+		#### Get self position including its current location of object itself
+		links.new(node_self_object.outputs['Self Object'], node_self_object_info.inputs['Object'])
+		links.new(node_self_object_info.outputs['Location'], node_self_add.inputs[0])
+		links.new(node_self_position.outputs['Position'], node_self_add.inputs[1])
+
+		#### Get reference object's stats and calculate uv values
+		links.new(node_ref_object_info.outputs['Geometry'], node_ref_stats.inputs['Geometry'])
+		links.new(node_ref_position.outputs['Position'], self.node_for_type(node_ref_stats.inputs, 'Attribute', 'VECTOR'))
+
+		#### Bring self position to 0 relative to reference
+		links.new(node_self_add.outputs['Vector'], node_subtract_01.inputs[0])
+		links.new(self.node_for_type(node_ref_stats.outputs, 'Min', 'VECTOR'), node_subtract_01.inputs[1])
+
+		#### Get delta of min max of reference
+		links.new(self.node_for_type(node_ref_stats.outputs, 'Max', 'VECTOR'), node_subtract_02.inputs[0])
+		links.new(self.node_for_type(node_ref_stats.outputs, 'Min', 'VECTOR'), node_subtract_02.inputs[1])
+
+		#### Calculate normalised value
+		links.new(node_subtract_01.outputs['Vector'], node_divide.inputs[0])
+		links.new(node_subtract_02.outputs['Vector'], node_divide.inputs[1])
+
+		#### Store normalised uv values
+		links.new(node_divide.outputs['Vector'], node_store_named_attribute.inputs['Value'])
+		node_store_named_attribute.inputs['Name'].default_value = 'geo_uv_texture'
+
+		# Set locations 
+		padding = 50
+		group_in.location.x = 0
+		group_in.location.y = 0
+
+		self.place_node_alongside(node_mesh_to_points, group_in, padding)
+		self.place_node_alongside(node_set_material, node_mesh_to_points, padding)
+		self.place_node_alongside(node_store_named_attribute, node_set_material, padding)
+		self.place_node_alongside(group_out, node_store_named_attribute, padding)
+
+		node_self_object.location.x = -250.0
+		node_self_object.location.y = -300.0
+		self.place_node_alongside(node_self_object_info, node_self_object, padding, node_self_object.location.y)
+		self.place_node_below(node_self_position, node_self_object_info, padding)
+		self.place_node_alongside(node_self_add, node_self_object_info, padding, node_self_position.location.y)
+
+		node_ref_object_info.location.x = -250.0
+		node_ref_object_info.location.y = -800.0
+		self.place_node_alongside(node_ref_stats, node_ref_object_info, padding, node_ref_object_info.location.y)
+		self.place_node_below(node_ref_position, node_ref_object_info, padding)
+
+		self.place_node_alongside(node_subtract_01, node_self_add, padding, node_self_add.location.y)
+		self.place_node_below(node_subtract_02, node_subtract_01, padding)
+		self.place_node_alongside(node_divide, node_subtract_01, padding, node_subtract_01.location.y)
+
 		return node_group
 
 	def scaled_dimension(self, las_file, targetCRS, fallbackCRS):
