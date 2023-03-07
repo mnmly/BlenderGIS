@@ -59,14 +59,15 @@ py_exec = next(py_path.glob("python*"))
 
 try:
 	import laspy
-except ImportError:
-    subprocess.call([py_exec, "-m", "pip", "install", "laspy", "laszip"])
-
-try:
 	import pyproj
 except ImportError:
-    subprocess.call([py_exec, "-m", "pip", "install", "pyproj"])
-
+	env = os.environ.copy()
+	for dep_name in ("laspy", "laszip", "lazrs", "pyproj"):
+		res = subprocess.run(
+			[sys.executable, "-m", "pip", "install", dep_name], env=env
+		)
+	import laspy
+	import pyproj
 
 PKG, SUBPKG = __package__.split('.', maxsplit=1)
 
