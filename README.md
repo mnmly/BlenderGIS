@@ -1,6 +1,6 @@
 Blender GIS
 ==========
-Blender minimum version required : v2.83
+Blender minimum version required : v3.4+
 
 Note : Since 2022, the OpenTopography web service requires an API key. Please register to opentopography.org and request a key. This service is still free.
 
@@ -11,7 +11,7 @@ Note : Since 2022, the OpenTopography web service requires an API key. Please re
 **Change the python path accordingly to your own Blender path**
 
 ```
-sudo /Applications/Blender.app/Contents/Resources/3.3/python/bin/python3.10 -m pip install laspy laszip pyproj lazrs --target /Applications/Blender.app/Contents/Resources/3.3/python/lib/python3.10/site-packages
+sudo /Applications/Blender.app/Contents/Resources/3.3/python/bin/python3.10 -m pip install laspy pyproj lazrs laszip
 ```
 
 ![las-usage](https://user-images.githubusercontent.com/317202/221855574-bf90814f-0a9a-40a6-8347-d2de6a48e6a5.gif)
