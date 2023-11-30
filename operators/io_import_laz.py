@@ -434,8 +434,8 @@ class IMPORTLAZ_OT_georaster(Operator, ImportHelper):
 		node_divide.operation = 'DIVIDE'
 
 		# Set properties
-		node_group.outputs.new('NodeSocketGeometry', 'Geometry')
-		node_group.inputs.new('NodeSocketGeometry', 'Geometry')
+		self.create_interface_socket(node_group, 'Geometry', 'OUTPUT', 'NodeSocketGeometry')
+		self.create_interface_socket(node_group, 'Geometry', 'INPUT', 'NodeSocketGeometry')
 		node_mesh_to_points.inputs['Radius'].default_value = 0.5
 
 		node_store_named_attribute.data_type = 'FLOAT_VECTOR'
@@ -501,6 +501,23 @@ class IMPORTLAZ_OT_georaster(Operator, ImportHelper):
 		self.place_node_alongside(node_divide, node_subtract_01, padding, node_subtract_01.location.y)
 
 		return node_group
+
+	def create_interface_socket(self, node_group, socket_name, in_out, socket_type):
+		group_name = 'Group Input' if in_out == 'INPUT' else 'Group Output'
+		node_name = 'Node' + group_name.replace(' ', '')
+		if not group_name in node_group.nodes:
+			node = node_group.nodes.new(node_name)
+		if hasattr(node_group, 'interface'):
+			socket_type = 'NodeSocketInt' if socket_type == 'NodeSocketIntUnsigned' else socket_type
+			node_group.interface.new_socket(socket_name, in_out=in_out, socket_type=socket_type)
+			return node_group.nodes[group_name]
+		else:
+			node = node_group.nodes.new(node_name)
+			if in_out == 'INPUT':
+				node_group.inputs.new(socket_type, socket_name)
+			else:
+				node_group.outputs.new(socket_type, socket_name)
+		return node
 
 	def scaled_dimension(self, las_file, targetCRS, fallbackCRS):
 
