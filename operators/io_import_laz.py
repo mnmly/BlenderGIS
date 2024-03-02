@@ -62,7 +62,7 @@ try:
 	import pyproj
 except ImportError:
 	env = os.environ.copy()
-	for dep_name in ("laspy", "laszip", "lazrs", "pyproj"):
+	for dep_name in ("laspy[lazrs]", "pyproj"):
 		res = subprocess.run(
 			[sys.executable, "-m", "pip", "install", dep_name], env=env
 		)
