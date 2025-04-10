@@ -295,10 +295,10 @@ class IMPORTLAZ_OT_georaster(Operator, ImportHelper):
 			normalised_coords = (verts - min_coords - delta_coords / 2.0) / (delta_coords / 2.0)
 			coords = normalised_coords * delta_coords / 2.0 # TODO FIX
 			pc.from_pydata(coords, [], [])
-			attribute_keys = ['classification', 
+			attribute_keys = ['classification', 'red', 'green', 'blue'
 			#'return_number', 'number_of_returns', 'point_source_id', 'gps_time'
 			]
-			attribute_type = ['INT',
+			attribute_type = ['INT', 'INT', 'INT', 'INT'
 			#			'INT8', 		  'INT8', 			   'INT',			 'FLOAT'
 			]
 			for (i, key) in enumerate(attribute_keys):
