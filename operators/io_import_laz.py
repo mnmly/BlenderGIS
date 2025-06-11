@@ -39,6 +39,7 @@ from ..core.georaster import GeoRaster
 from .utils import bpyGeoRaster, exportAsMesh
 from .utils import placeObj, adjust3Dview, showTextures, addTexture, getBBOX
 from .utils import rasterExtentToMesh, geoRastUVmap, setDisplacer
+from ..core.utils import BBOX
 
 from ..core import HAS_GDAL
 if HAS_GDAL:
@@ -368,7 +369,6 @@ class IMPORTLAZ_OT_georaster(Operator, ImportHelper):
 					max_z = max(coord[2] for coord in all_coords)
 					
 					# Create a combined bounding box using the same class as getBBOX returns
-					from ..operators.utils import BBOX
 					bb = BBOX(xmin=min_x, xmax=max_x, ymin=min_y, ymax=max_y, zmin=min_z, zmax=max_z)
 				else:
 					bb = getBBOX.fromObj(final_objects[0])
