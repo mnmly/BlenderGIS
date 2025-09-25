@@ -63,9 +63,7 @@ try:
 except ImportError:
 	env = os.environ.copy()
 	for dep_name in ("laspy[lazrs]", "pyproj"):
-		res = subprocess.run(
-			[sys.executable, "-m", "pip", "install", dep_name], env=env
-		)
+		res = subprocess.run( [sys.executable, "-m", "pip", "install", dep_name], env=env)
 	import laspy
 	import pyproj
 
@@ -112,6 +110,12 @@ class IMPORTLAZ_OT_georaster(Operator, ImportHelper):
 		name = "Fallback CRS",
 		description = "Choose a Coordinate Reference System when LIDAR data doesn't contain CRS metadata",
 		items = listPredefCRS,
+		)
+	
+	use_fallback: BoolProperty(
+		name="Use Fallback",
+		description="Skip parsing CRS from LAS header and use fallback CRS directly",
+		default=False
 		)
 	
 	import_scale: FloatProperty(
@@ -188,6 +192,7 @@ class IMPORTLAZ_OT_georaster(Operator, ImportHelper):
 		split.label(text='Fallback CRS:')
 		split.prop(self, "fallbackCRS", text='')
 		row.operator("bgis.add_predef_crs", text='', icon='ADD')
+		layout.prop(self, "use_fallback")
 
 	@classmethod
 	def poll(cls, context):
@@ -261,7 +266,7 @@ class IMPORTLAZ_OT_georaster(Operator, ImportHelper):
 				continue
 
 			# Get point cloud coordinates and handle CRS
-			xyz, source_crs, is_fallback = self.get_transformed_coordinates(las, pointCRS, self.fallbackCRS)
+			xyz, source_crs, is_fallback = self.get_transformed_coordinates(las, pointCRS, self.fallbackCRS, self.use_fallback)
 			
 			if xyz is None:
 				continue
@@ -378,17 +383,23 @@ class IMPORTLAZ_OT_georaster(Operator, ImportHelper):
 		self.report({'INFO'}, f"Successfully imported {len(final_objects)} point cloud(s)")
 		return {'FINISHED'}
 
-	def get_transformed_coordinates(self, las_file, target_crs_str, fallback_crs_str):
+	def get_transformed_coordinates(self, las_file, target_crs_str, fallback_crs_str, use_fallback=False):
 		"""Extract and transform coordinates from LAS file, handling CRS detection"""
-		try:
-			# Try to get CRS from LAS header
-			source_crs = las_file.header.parse_crs()
-			is_fallback = False
-		except (pyproj.exceptions.CRSError, AttributeError):
-			# Use fallback CRS if header CRS cannot be parsed
+		if use_fallback:
+			# Skip header parsing and use fallback CRS directly
 			source_crs = pyproj.CRS.from_string(fallback_crs_str)
 			is_fallback = True
-			self.report({'WARNING'}, f"Could not detect CRS from file, using fallback: {fallback_crs_str}")
+			self.report({'INFO'}, f"Using fallback CRS as requested: {fallback_crs_str}")
+		else:
+			try:
+				# Try to get CRS from LAS header
+				source_crs = las_file.header.parse_crs()
+				is_fallback = False
+			except (pyproj.exceptions.CRSError, AttributeError):
+				# Use fallback CRS if header CRS cannot be parsed
+				source_crs = pyproj.CRS.from_string(fallback_crs_str)
+				is_fallback = True
+				self.report({'WARNING'}, f"Could not detect CRS from file, using fallback: {fallback_crs_str}")
 
 		if not source_crs:
 			self.report({'ERROR'}, "Could not determine coordinate reference system")
