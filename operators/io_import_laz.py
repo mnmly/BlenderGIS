@@ -420,27 +420,23 @@ class IMPORTLAZ_OT_georaster(Operator, ImportHelper):
 
 	def add_point_attributes(self, mesh, las_file, point_count):
 		"""Add LAS point attributes to Blender mesh"""
-		attribute_mapping = {
-			'classification': ('INT', 'POINT'),
-			'red': ('INT', 'POINT'),
-			'green': ('INT', 'POINT'),
-			'blue': ('INT', 'POINT'),
-			'intensity': ('INT', 'POINT'),
-			'return_number': ('INT', 'POINT'),
-			'number_of_returns': ('INT', 'POINT'),
-		}
-
-		for attr_name, (attr_type, domain) in attribute_mapping.items():
-			if attr_name in las_file.point_format.dimension_names:
-				try:
-					mesh.attributes.new(name=attr_name, type=attr_type, domain=domain)
-					attr_data = getattr(las_file, attr_name)
-					# Handle potential clipping by only taking the first point_count values
-					if len(attr_data) > point_count:
-						attr_data = attr_data[:point_count]
-					mesh.attributes[attr_name].data.foreach_set("value", attr_data.tolist())
-				except Exception as e:
-					log.warning(f"Could not add attribute {attr_name}: {e}")
+	
+		for attr_name in las_file.point_format.dimension_names:
+			if attr_name in ('X', 'Y', 'Z'):
+				continue  # Skip coordinates
+			dim_info = las_file.point_format.dimension_by_name(attr_name)
+			try:
+				dtype = dim_info.dtype
+				attr_type = 'INT' if np.issubdtype(dtype, np.integer) else 'FLOAT'
+				domain = 'POINT'
+				mesh.attributes.new(name=attr_name, type=attr_type, domain=domain)
+				attr_data = getattr(las_file, attr_name)
+				# Handle potential clipping by only taking the first point_count values
+				if len(attr_data) > point_count:
+					attr_data = attr_data[:point_count]
+				mesh.attributes[attr_name].data.foreach_set("value", attr_data.tolist())
+			except Exception as e:
+				log.warning(f"Could not add attribute {attr_name}: {e}")
 
 	def assign_geometry_node(self, obj, context):
 		"""Assign geometry node group for point cloud visualization"""
