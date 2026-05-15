@@ -126,6 +126,12 @@ class IMPORTLAZ_OT_georaster(Operator, ImportHelper):
 		max=1000.0
 	)
 
+	import_attributes: BoolProperty(
+		name="Import LAS attributes",
+		description="Add LAS dimensions (intensity, classification, RGB, etc.) as Blender point attributes. Disable for fastest import",
+		default=True,
+	)
+
 	reprojection: BoolProperty(
 			name="Specify point cloud CRS",
 			description="Specify point cloud CRS if it's different from scene CRS",
@@ -157,6 +163,7 @@ class IMPORTLAZ_OT_georaster(Operator, ImportHelper):
 		# Point cloud specific settings
 		layout.prop(self, 'point_size')
 		layout.prop(self, 'import_scale')
+		layout.prop(self, 'import_attributes')
 		
 		# Clipping options
 		layout.prop(self, 'clip')
@@ -233,10 +240,17 @@ class IMPORTLAZ_OT_georaster(Operator, ImportHelper):
 			rprj = True
 			rprjToPointCloud = Reproj(geoscn.crs, pointCRS)
 			rprjToScene = Reproj(pointCRS, geoscn.crs)
+			# Vectorized transformer for per-vertex reprojection (much faster than Reproj.pt loop)
+			pyprojToScene = pyproj.Transformer.from_crs(
+				pyproj.CRS.from_string(pointCRS),
+				pyproj.CRS.from_string(geoscn.crs),
+				always_xy=True,
+			)
 		else:
 			rprj = False
 			rprjToPointCloud = None
 			rprjToScene = None
+			pyprojToScene = None
 
 		# Handle clipping extent if requested
 		subBox = None
@@ -257,7 +271,7 @@ class IMPORTLAZ_OT_georaster(Operator, ImportHelper):
 		for f in self.files:
 			filePath = os.path.join(os.path.dirname(self.filepath), f.name)
 			name = os.path.basename(filePath)[:-4]
-			
+
 			try:
 				las = laspy.read(filePath)
 			except IOError as e:
@@ -311,13 +325,11 @@ class IMPORTLAZ_OT_georaster(Operator, ImportHelper):
 			xyz = obj_data['xyz']
 			name = obj_data['name']
 			
-			# Transform to scene coordinates if needed
+			# Transform to scene coordinates if needed (vectorized via pyproj)
 			if rprj:
-				transformed_pts = []
-				for pt in xyz:
-					tx, ty = rprjToScene.pt(pt[0], pt[1])
-					transformed_pts.append([tx, ty, pt[2]])
-				xyz = np.array(transformed_pts)
+				tx, ty = pyprojToScene.transform(xyz[:, 0], xyz[:, 1])
+				xyz[:, 0] = tx
+				xyz[:, 1] = ty
 
 			# Offset by scene origin (now that we have the global origin)
 			if geoscn.isGeoref:
@@ -327,12 +339,15 @@ class IMPORTLAZ_OT_georaster(Operator, ImportHelper):
 			# Apply import scale
 			xyz *= self.import_scale
 
-			# Create mesh from point cloud
+			# Create mesh from point cloud (foreach_set on a flat numpy buffer is much faster than from_pydata)
 			pc = bpy.data.meshes.new(name)
-			pc.from_pydata(xyz.tolist(), [], [])
+			n_points = xyz.shape[0]
+			pc.vertices.add(n_points)
+			pc.vertices.foreach_set("co", np.ascontiguousarray(xyz, dtype=np.float32).ravel())
+			pc.update()
 
-			# Add point attributes
-			self.add_point_attributes(pc, obj_data['las'], xyz.shape[0])
+			if self.import_attributes:
+				self.add_point_attributes(pc, obj_data['las'], xyz.shape[0])
 
 			# Create and place object - using BlenderGIS placeObj utility
 			obj = placeObj(pc, name)
@@ -391,12 +406,16 @@ class IMPORTLAZ_OT_georaster(Operator, ImportHelper):
 			is_fallback = True
 			self.report({'INFO'}, f"Using fallback CRS as requested: {fallback_crs_str}")
 		else:
+			source_crs = None
 			try:
 				# Try to get CRS from LAS header
 				source_crs = las_file.header.parse_crs()
-				is_fallback = False
 			except (pyproj.exceptions.CRSError, AttributeError):
-				# Use fallback CRS if header CRS cannot be parsed
+				source_crs = None
+			if source_crs:
+				is_fallback = False
+			else:
+				# Header had no CRS (parse_crs returned None) or parsing failed — use fallback
 				source_crs = pyproj.CRS.from_string(fallback_crs_str)
 				is_fallback = True
 				self.report({'WARNING'}, f"Could not detect CRS from file, using fallback: {fallback_crs_str}")
@@ -418,11 +437,22 @@ class IMPORTLAZ_OT_georaster(Operator, ImportHelper):
 
 		return xyz, source_crs, is_fallback
 
+	# Bit-field sub-views laspy unpacks from packed bytes — usually redundant
+	# (the underlying packed dim is also exposed) and expensive to materialize.
+	_BITFIELD_SUBFIELDS = frozenset({
+		'return_number', 'number_of_returns',
+		'scan_direction_flag', 'edge_of_flight_line',
+		'classification_flags', 'scanner_channel',
+		'synthetic', 'key_point', 'withheld', 'overlap',
+	})
+
 	def add_point_attributes(self, mesh, las_file, point_count):
 		"""Add LAS point attributes to Blender mesh"""
-	
+
 		for attr_name in las_file.point_format.dimension_names:
 			if attr_name in ('X', 'Y', 'Z'):
+				continue
+			if attr_name in self._BITFIELD_SUBFIELDS:
 				continue  # Skip coordinates
 			dim_info = las_file.point_format.dimension_by_name(attr_name)
 			try:
@@ -430,11 +460,11 @@ class IMPORTLAZ_OT_georaster(Operator, ImportHelper):
 				attr_type = 'INT' if np.issubdtype(dtype, np.integer) else 'FLOAT'
 				domain = 'POINT'
 				mesh.attributes.new(name=attr_name, type=attr_type, domain=domain)
-				attr_data = getattr(las_file, attr_name)
+				attr_data = np.asarray(getattr(las_file, attr_name))
 				# Handle potential clipping by only taking the first point_count values
 				if len(attr_data) > point_count:
 					attr_data = attr_data[:point_count]
-				mesh.attributes[attr_name].data.foreach_set("value", attr_data.tolist())
+				mesh.attributes[attr_name].data.foreach_set("value", attr_data)
 			except Exception as e:
 				log.warning(f"Could not add attribute {attr_name}: {e}")
 
