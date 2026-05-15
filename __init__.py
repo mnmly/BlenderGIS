@@ -25,7 +25,7 @@ bl_info = {
 	'author': 'domlysz',
 	'license': 'GPL',
 	'deps': '',
-	'version': (2, 2, 10),
+	'version': (2, 2, 14),
 	'blender': (2, 83, 0),
 	'location': 'View3D > Tools > GIS',
 	'warning': '',
@@ -41,6 +41,9 @@ class BlenderVersionError(Exception):
 
 if bl_info['blender'] > bpy.app.version:
 	raise BlenderVersionError(f"This addon requires Blender >= {bl_info['blender']}")
+if bpy.app.version[0] > 5: #prevent breaking changes on major release
+	raise BlenderVersionError(f"This addon is not tested against Blender {bpy.app.version[0]}.x breaking changes")
+
 
 #Modules
 CAM_GEOPHOTO = True
@@ -361,7 +364,7 @@ def register():
 	#update core settings according to addon prefs
 	settings.proj_engine = preferences.projEngine
 	settings.img_engine = preferences.imgEngine
-
+	settings.maptiler_api_key = preferences.maptiler_api_key
 
 def unregister():
 

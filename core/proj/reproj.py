@@ -211,21 +211,15 @@ class Reproj():
 				 self.iproj = 'PYPROJ'
 			elif ((crs1.isWM or crs1.isUTM) and crs2.isWGS84) or (crs1.isWGS84 and (crs2.isWM or crs2.isUTM)):
 				self.iproj = 'BUILTIN'
-			elif EPSGIO.ping():
+			else:
 				#this is the slower solution, not suitable for reproject lot of points
 				self.iproj = 'EPSGIO'
-			else:
-				raise ReprojError('Too limited reprojection capabilities.')
 		else:
 			if (self.iproj == 'GDAL' and not HAS_GDAL) or (self.iproj == 'PYPROJ' and not HAS_PYPROJ):
 				raise ReprojError('Missing reproj engine')
 			if self.iproj == 'BUILTIN':
 				if not ( ((crs1.isWM or crs1.isUTM) and crs2.isWGS84) or (crs1.isWGS84 and (crs2.isWM or crs2.isUTM)) ):
 					raise ReprojError('Too limited built in reprojection capabilities')
-			if self.iproj == 'EPSGIO':
-				if not  EPSGIO.ping():
-					raise ReprojError('Cannot access epsg.io service')
-
 
 		if self.iproj == 'GDAL':
 			self.crs1 = crs1.getOgrSpatialRef()
@@ -237,6 +231,7 @@ class Reproj():
 			self.crs2 = crs2.getPyProj()
 
 		elif self.iproj == 'EPSGIO':
+			self.mapTilerCoords = MapTilerCoordinates()
 			if crs1.isEPSG and crs2.isEPSG:
 				self.crs1, self.crs2 = crs1.code, crs2.code
 			else:
@@ -292,7 +287,7 @@ class Reproj():
 			return list(zip(xs, ys))
 
 		elif self.iproj == 'EPSGIO':
-			return EPSGIO.reprojPts(self.crs1, self.crs2, pts)
+			return self.mapTilerCoords.reprojPts(self.crs1, self.crs2, pts)
 
 		elif self.iproj == 'BUILTIN':
 			#Web Mercator

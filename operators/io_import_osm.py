@@ -157,7 +157,7 @@ class OSM_IMPORT():
 	buildingsExtrusion: BoolProperty(name='Buildings extrusion', description='', default=True)
 	defaultHeight: FloatProperty(name='Default Height', description='Set the height value using for extrude building when the tag is missing', default=20)
 	levelHeight: FloatProperty(name='Level height', description='Set a height for a building level, using for compute extrude height based on number of levels', default=3)
-	randomHeightThreshold: FloatProperty(name='Random height threshold', description='Threshold value for randomize default height', default=0)
+	randomHeightThreshold: IntProperty(name='Random height threshold', description='Threshold value for randomize default height', default=0)
 
 	def draw(self, context):
 		layout = self.layout
@@ -284,7 +284,7 @@ class OSM_IMPORT():
 						if minH < 0 :
 							minH = 0
 						maxH = self.defaultHeight + self.randomHeightThreshold
-						offset = random.randint(minH, maxH)
+						offset = random.randint(int(minH), int(maxH))
 
 					#Extrude
 					"""
