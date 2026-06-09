@@ -55,6 +55,7 @@ IMPORT_OSM = True
 IMPORT_SHP = True
 IMPORT_ASC = True
 IMPORT_LAZ = True
+IMPORT_GEOJSON = True
 DELAUNAY = True
 TERRAIN_NODES = True
 TERRAIN_RECLASS = True
@@ -159,6 +160,8 @@ if IMPORT_ASC:
 	from .operators import io_import_asc
 if IMPORT_LAZ:
 	from .operators import io_import_laz
+if IMPORT_GEOJSON:
+	from .operators import io_import_geojson
 if DELAUNAY:
 	from .operators import mesh_delaunay_voronoi
 if TERRAIN_NODES:
@@ -208,6 +211,8 @@ class VIEW3D_MT_menu_gis_import(bpy.types.Menu):
 			self.layout.operator('importgis.asc_file', icon_value=icons_dict["asc"].icon_id, text="ESRI ASCII Grid (.asc)")
 		if IMPORT_LAZ:
 			self.layout.operator('importgis.laz', icon_value=icons_dict["raster"].icon_id, text="LIDAR (.las .laz)")
+		if IMPORT_GEOJSON:
+			self.layout.operator('importgis.geojson_file_dialog', icon_value=icons_dict["shp"].icon_id, text="GeoJSON (.geojson .json)")
 
 class VIEW3D_MT_menu_gis_export(bpy.types.Menu):
 	bl_label = "Export"
@@ -328,6 +333,8 @@ def register():
 		io_import_asc.register()
 	if IMPORT_LAZ:
 		io_import_laz.register()
+	if IMPORT_GEOJSON:
+		io_import_geojson.register()
 	if DELAUNAY:
 		mesh_delaunay_voronoi.register()
 	if DROP:
@@ -400,6 +407,10 @@ def unregister():
 		io_import_osm.unregister()
 	if IMPORT_ASC:
 		io_import_asc.unregister()
+	if IMPORT_LAZ:
+		io_import_laz.unregister()
+	if IMPORT_GEOJSON:
+		io_import_geojson.unregister()
 	if DELAUNAY:
 		mesh_delaunay_voronoi.unregister()
 	if DROP:
