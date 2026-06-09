@@ -67,7 +67,7 @@ except ImportError:
 	import laspy
 	import pyproj
 
-PKG, SUBPKG = __package__.split('.', maxsplit=1)
+PKG = __package__.rsplit('.', 1)[0]
 
 class IMPORTLAZ_OT_georaster(Operator, ImportHelper):
 	"""Import georeferenced LAZ/LAS point cloud"""

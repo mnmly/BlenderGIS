@@ -49,7 +49,7 @@ from bpy_extras.io_utils import ImportHelper #helper class defines filename and 
 from bpy.props import StringProperty, BoolProperty, EnumProperty, IntProperty
 from bpy.types import Operator
 
-PKG, SUBPKG = __package__.split('.', maxsplit=1)
+PKG = __package__.rsplit('.', 1)[0]
 
 class IMPORTGIS_OT_georaster(Operator, ImportHelper):
 	"""Import georeferenced raster (need world file)"""

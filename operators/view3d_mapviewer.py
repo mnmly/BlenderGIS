@@ -53,7 +53,7 @@ from .utils import placeObj, adjust3Dview, showTextures, rasterExtentToMesh, geo
 #https://github.com/damianbraun/nominatim
 from .lib.osm.nominatim import nominatimQuery
 
-PKG, SUBPKG = __package__.split('.', maxsplit=1) #blendergis.basemaps
+PKG = __package__.rsplit('.', 1)[0] #blendergis.basemaps
 
 ####################
 

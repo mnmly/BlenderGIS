@@ -23,7 +23,7 @@ from .utils import bpyGeoRaster as GeoRaster
 from .utils import placeObj, adjust3Dview, showTextures, addTexture, getBBOX
 from .utils import rasterExtentToMesh, geoRastUVmap, setDisplacer
 
-PKG, SUBPKG = __package__.split('.', maxsplit=1)
+PKG = __package__.rsplit('.', 1)[0]
 
 
 class IMPORTGIS_OT_ascii_grid(Operator, ImportHelper):

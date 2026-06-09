@@ -22,7 +22,7 @@ from ..core.utils import perf_clock
 from ..core import settings
 USER_AGENT = settings.user_agent
 
-PKG, SUBPKG = __package__.split('.', maxsplit=1)
+PKG = __package__.rsplit('.', 1)[0]
 
 #WARNING: There is a known bug with using an enum property with a callback, Python must keep a reference to the strings returned
 #https://developer.blender.org/T48873

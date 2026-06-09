@@ -19,7 +19,7 @@ from ..core.proj import SRS, reprojBbox
 from ..core import settings
 USER_AGENT = settings.user_agent
 
-PKG, SUBPKG = __package__.split('.', maxsplit=1)
+PKG = __package__.rsplit('.', 1)[0]
 
 TIMEOUT = 120
 

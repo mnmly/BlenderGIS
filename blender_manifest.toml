@@ -1,0 +1,43 @@
+schema_version = "1.0.0"
+
+id = "blendergis"
+version = "2.2.14"
+name = "BlenderGIS"
+tagline = "Various tools to handle geographic data"
+maintainer = "domlysz"
+# Supported types: "add-on", "theme"
+type = "add-on"
+
+website = "https://github.com/domlysz/BlenderGIS"
+
+# Tags from the Blender add-on tag list:
+# https://docs.blender.org/manual/en/dev/extensions/tags.html
+tags = ["Import-Export", "3D View"]
+
+blender_version_min = "4.2.0"
+
+# License conforming to https://spdx.org/licenses/
+license = [
+  "SPDX:GPL-3.0-or-later",
+]
+
+# Only available on platforms with the relevant optional native libs, but the
+# add-on falls back to pure-python, so keep it available everywhere.
+
+# Resources the add-on needs:
+# - "network" : download basemaps, OSM/Overpass data, SRTM/DEM tiles and reproject through epsg.io
+# - "files"   : read geodata files and read/write the tile cache folder
+[permissions]
+network = "Download basemaps, OpenStreetMap data, SRTM/DEM tiles and reproject coordinates via epsg.io"
+files = "Read geodata files (shp, geojson, raster, las/laz...) and read/write the basemaps tile cache"
+
+[build]
+paths_exclude_pattern = [
+  "__pycache__/",
+  "/.git/",
+  "/.github/",
+  "/.gitignore",
+  "/.vscode/",
+  "*.zip",
+  "/docs/",
+]

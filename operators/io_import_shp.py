@@ -20,7 +20,7 @@ from ..core.utils import perf_clock
 
 from .utils import adjust3Dview, getBBOX, DropToGround
 
-PKG, SUBPKG = __package__.split('.', maxsplit=1)
+PKG = __package__.rsplit('.', 1)[0]
 
 featureType={
 0:'Null',
