@@ -480,7 +480,11 @@ class IMPORTLAZ_OT_georaster(Operator, ImportHelper):
 		modifier = obj.modifiers.new(node_group_name, 'NODES')
 		modifier.node_group = node_group
 		# Set point size from user preference
-		if "Socket_2" in modifier:
+		if hasattr(modifier, "properties"): # Blender 5.x: inputs are no longer IDProperties of the modifier
+			pointSize = getattr(modifier.properties.inputs, "Socket_2", None)
+			if pointSize is not None:
+				pointSize.value = self.point_size
+		elif "Socket_2" in modifier:
 			modifier["Socket_2"] = self.point_size
 
 	# ... [Rest of the geometry node methods remain the same as they handle visualization, 

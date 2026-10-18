@@ -35,7 +35,7 @@ GEOM_CATEGORY = {
 
 def loadGeojson(filepath):
 	"""Read a GeoJSON file and return the parsed python object"""
-	with open(filepath, 'r', encoding='utf-8') as f:
+	with open(filepath, 'r', encoding='utf-8-sig') as f:
 		return json.load(f)
 
 
