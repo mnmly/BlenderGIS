@@ -32,6 +32,7 @@ IMPORT_SHP = True
 IMPORT_ASC = True
 IMPORT_LAZ = True
 IMPORT_GEOJSON = True
+IMPORT_QGIS = True
 DELAUNAY = True
 TERRAIN_NODES = True
 TERRAIN_RECLASS = True
@@ -94,6 +95,8 @@ if IMPORT_LAZ:
 	from .operators import io_import_laz
 if IMPORT_GEOJSON:
 	from .operators import io_import_geojson
+if IMPORT_QGIS:
+	from .operators import io_import_qgis
 if DELAUNAY:
 	from .operators import mesh_delaunay_voronoi
 if TERRAIN_NODES:
@@ -149,6 +152,8 @@ class VIEW3D_MT_menu_gis_import(bpy.types.Menu):
 			self.layout.operator('importgis.laz', icon_value=icons_dict["raster"].icon_id, text="LIDAR (.las .laz)")
 		if IMPORT_GEOJSON:
 			self.layout.operator('importgis.geojson_file_dialog', icon_value=icons_dict["shp"].icon_id, text="GeoJSON (.geojson .json)")
+		if IMPORT_QGIS:
+			self.layout.operator('importgis.qgis_file_dialog', icon='FILE', text="QGIS project (.qgs .qgz)")
 
 class VIEW3D_MT_menu_gis_export(bpy.types.Menu):
 	bl_label = "Export"
@@ -275,6 +280,8 @@ def register():
 		io_import_laz.register()
 	if IMPORT_GEOJSON:
 		io_import_geojson.register()
+	if IMPORT_QGIS:
+		io_import_qgis.register()
 	if DELAUNAY:
 		mesh_delaunay_voronoi.register()
 	if DROP:
@@ -353,6 +360,8 @@ def unregister():
 		io_import_laz.unregister()
 	if IMPORT_GEOJSON:
 		io_import_geojson.unregister()
+	if IMPORT_QGIS:
+		io_import_qgis.unregister()
 	if DELAUNAY:
 		mesh_delaunay_voronoi.unregister()
 	if DROP:

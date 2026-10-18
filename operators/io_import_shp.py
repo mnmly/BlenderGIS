@@ -335,7 +335,8 @@ class IMPORTGIS_OT_shapefile(Operator):
 		return context.mode == 'OBJECT'
 
 	def __del__(self):
-		bpy.context.window.cursor_set('DEFAULT')
+		if bpy.context.window: #None when run in background or from another operator without window
+			bpy.context.window.cursor_set('DEFAULT')
 
 	def execute(self, context):
 
@@ -343,7 +344,8 @@ class IMPORTGIS_OT_shapefile(Operator):
 
 		#Set cursor representation to 'loading' icon
 		w = context.window
-		w.cursor_set('WAIT')
+		if w:
+			w.cursor_set('WAIT')
 		t0 = perf_clock()
 
 		bpy.ops.object.select_all(action='DESELECT')
