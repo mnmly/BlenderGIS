@@ -38,7 +38,8 @@ from .utils import bpyGeoRaster, exportAsMesh
 from .utils import placeObj, adjust3Dview, showTextures, addTexture, getBBOX
 from .utils import rasterExtentToMesh, geoRastUVmap, setDisplacer
 from .utils import getPointCloudMaterial, setPointColors, setPointCloudMaterial
-from .utils.pointcloud_utils import POINTCLOUD_NODE_GROUP
+from .utils.pointcloud_utils import POINTCLOUD_NODE_GROUP, COLOR_ATTRIBUTE
+from .pointcloud_display import setColorBy
 from ..core.utils import BBOX
 
 from ..core import HAS_GDAL
@@ -305,6 +306,8 @@ class IMPORTLAZ_OT_georaster(Operator, ImportHelper):
 
 			# Apply geometry nodes for point visualization
 			self.assign_geometry_node(obj, context)
+			# Show LAS RGB when available, elevation otherwise (changeable in the Point Cloud panel)
+			setColorBy(obj, 'RGB' if COLOR_ATTRIBUTE in pc.color_attributes else 'ELEVATION')
 			
 			final_objects.append(obj)
 

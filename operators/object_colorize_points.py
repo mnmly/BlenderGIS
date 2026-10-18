@@ -32,8 +32,9 @@ from bpy.types import Operator
 
 from ..geoscene import GeoScene
 from ..prefs import PredefCRS
-from .utils import bpyGeoRaster, getPointCloudMaterial, newRasterPointCloudMaterial, setPointCloudMaterial, setPointColors, getPointColors
+from .utils import bpyGeoRaster, newRasterPointCloudMaterial, setPointColors, getPointColors
 from .utils.pointcloud_utils import UV_ATTRIBUTE, POINTCLOUD_RASTER_MATERIAL
+from .pointcloud_display import setColorBy
 
 
 def pointsGeoCoords(obj, geoscn):
@@ -149,7 +150,8 @@ class OBJECT_OT_colorize_points(Operator, ImportHelper):
 				if UV_ATTRIBUTE in mesh.attributes:
 					mesh.attributes.remove(mesh.attributes[UV_ATTRIBUTE])
 				mesh.attributes.new(UV_ATTRIBUTE, 'FLOAT2', 'POINT').data.foreach_set('vector', uv.ravel())
-				setPointCloudMaterial(obj, mat)
+				obj.bgis_pointcloud.rasterMaterial = mat
+				setColorBy(obj, 'RASTER')
 			else:
 				rgba = getPointColors(mesh)
 				if rgba is None:
@@ -158,7 +160,7 @@ class OBJECT_OT_colorize_points(Operator, ImportHelper):
 				rows = h - 1 - np.floor(yPx[inside]).astype(np.int64)
 				rgba[inside] = pixels[rows, cols]
 				setPointColors(mesh, rgba)
-				setPointCloudMaterial(obj, getPointCloudMaterial())
+				setColorBy(obj, 'RGB')
 			mesh.update()
 
 		if self.mode == 'BAKE' and img.users == 0:

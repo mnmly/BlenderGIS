@@ -106,6 +106,8 @@ if DROP:
 	from .operators import object_drop
 if COLORIZE_POINTS:
 	from .operators import object_colorize_points
+if IMPORT_LAZ or COLORIZE_POINTS:
+	from .operators import pointcloud_display
 if EARTH_SPHERE:
 	from .operators import mesh_earth_sphere
 
@@ -267,6 +269,8 @@ def register():
 		io_import_osm.register()
 	if IMPORT_ASC:
 		io_import_asc.register()
+	if IMPORT_LAZ or COLORIZE_POINTS:
+		pointcloud_display.register()
 	if IMPORT_LAZ:
 		io_import_laz.register()
 	if IMPORT_GEOJSON:
@@ -355,6 +359,8 @@ def unregister():
 		object_drop.unregister()
 	if COLORIZE_POINTS:
 		object_colorize_points.unregister()
+	if IMPORT_LAZ or COLORIZE_POINTS:
+		pointcloud_display.unregister()
 	if GET_DEM:
 		io_get_dem.unregister()
 	if CAM_GEOPHOTO:

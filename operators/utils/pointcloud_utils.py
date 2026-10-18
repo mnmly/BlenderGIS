@@ -83,6 +83,8 @@ def setPointCloudMaterial(obj, mat, singleUser=True):
 		setMatNodes = [node for node in modifier.node_group.nodes if node.type == 'SET_MATERIAL']
 		if not setMatNodes:
 			continue
+		if all(node.inputs['Material'].default_value == mat for node in setMatNodes):
+			return #already set, no need to make the group single user
 		if singleUser and (modifier.node_group.name == POINTCLOUD_NODE_GROUP or modifier.node_group.users > 1):
 			modifier.node_group = modifier.node_group.copy()
 			setMatNodes = [node for node in modifier.node_group.nodes if node.type == 'SET_MATERIAL']
