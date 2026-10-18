@@ -22,6 +22,7 @@
 '''Import the layers of a QGIS project (.qgs / .qgz), each with its matching BlenderGIS importer'''
 
 import os
+import re
 import json
 import logging
 log = logging.getLogger(__name__)
@@ -35,9 +36,15 @@ from bpy.types import Operator, PropertyGroup, UIList
 from ..geoscene import GeoScene
 from ..core.qgis import QgisProject, QgisProjectError
 from ..core.qgis import project as qgis
-from .utils import adjust3Dview, getBBOX
+from ..core.basemaps.xyz import registerXYZSource, zoomForResolution, tileCount, fetchXYZ
+from .utils import adjust3Dview, getBBOX, placeObj, addTexture
 
 PKG = __package__.rsplit('.', 1)[0]
+
+#raster planes are stacked in QGIS drawing order, this far apart (scene units), to avoid z-fighting
+RASTER_STACK_GAP = 0.05
+#refuse basemaps needing more tiles than this (rate limits of tile servers)
+MAX_TILES = 2000
 
 KIND_LABELS = {
 	qgis.SHP: ('Shapefile', 'MESH_DATA'),
@@ -83,6 +90,9 @@ def fillLayerList(wm, project):
 		item.groupPath = ' / '.join(layer.groupPath)
 		item.supported = layer.supported
 		item.reason = layer.reason or ''
+		if layer.kind == qgis.XYZ and item.supported and not bpy.app.online_access:
+			item.supported = False
+			item.reason = "Enable Allow Online Access (Preferences > System) to download basemaps"
 		item.selected = layer.supported and layer.visible
 
 
@@ -159,6 +169,12 @@ class IMPORTGIS_OT_qgis_project(Operator):
 		default=0.5, min=0.01, max=10.0
 		)
 
+	basemap_size: IntProperty(
+		name="Basemap size",
+		description="Maximum size in pixels of the basemaps (XYZ tiles) downloaded for the QGIS map view extent",
+		default=2048, min=256, max=8192
+		)
+
 	@classmethod
 	def poll(cls, context):
 		return context.mode == 'OBJECT'
@@ -177,7 +193,9 @@ class IMPORTGIS_OT_qgis_project(Operator):
 		row.label(text="Select:")
 		for mode, text in (('VISIBLE', 'Visible in QGIS'), ('ALL', 'All'), ('NONE', 'None')):
 			row.operator('importgis.qgis_select', text=text).mode = mode
-		layout.prop(self, 'point_size')
+		row = layout.row()
+		row.prop(self, 'point_size')
+		row.prop(self, 'basemap_size')
 		geoscn = GeoScene(context.scene)
 		if geoscn.isGeoref:
 			layout.label(text=f"Layers will be reprojected to the scene CRS {geoscn.crs}", icon='INFO')
@@ -194,6 +212,8 @@ class IMPORTGIS_OT_qgis_project(Operator):
 		if wm.bgis_qgis_path != project.path:
 			fillLayerList(wm, project) #called without the dialog: visible layers
 		layers = [project.layers[item.order] for item in wm.bgis_qgis_layers if item.selected and item.supported]
+		if not bpy.app.online_access:
+			layers = [layer for layer in layers if layer.kind != qgis.XYZ]
 		if not layers:
 			self.report({'WARNING'}, "No layer selected")
 			return {'CANCELLED'}
@@ -211,7 +231,7 @@ class IMPORTGIS_OT_qgis_project(Operator):
 			return {'CANCELLED'}
 
 		collections = {}
-		imported, failed = [], []
+		imported, failed, importedLayers = [], [], []
 		adjustView = prefs.adjust3Dview
 		prefs.adjust3Dview = False #adjust once at the end
 		try:
@@ -219,7 +239,7 @@ class IMPORTGIS_OT_qgis_project(Operator):
 			for layer in reversed(layers):
 				before = set(bpy.data.objects)
 				try:
-					result = importLayer(layer, prefs, self.point_size)
+					result = importLayer(context, layer, project, prefs, self)
 				except Exception as e:
 					log.error(f"Cannot import QGIS layer {layer.name}", exc_info=True)
 					failed.append(f"{layer.name} ({e})")
@@ -230,8 +250,15 @@ class IMPORTGIS_OT_qgis_project(Operator):
 					continue
 				organizeObjects(context, objs, layer, project, collections)
 				imported.extend(objs)
+				importedLayers.append((layer, objs))
 		finally:
 			prefs.adjust3Dview = adjustView
+
+		#raster planes all lie at z=0: offset them in QGIS drawing order (top layer highest)
+		planes = [(layer, objs) for layer, objs in importedLayers if layer.kind in (qgis.RASTER, qgis.XYZ)]
+		for rank, (layer, objs) in enumerate(sorted(planes, key=lambda lo: lo[0].order)):
+			for obj in objs:
+				obj.location.z -= rank * RASTER_STACK_GAP
 
 		if imported:
 			bpy.ops.object.select_all(action='DESELECT')
@@ -279,8 +306,10 @@ def ensurePredefCRS(prefs, crs, name):
 	prefs.predefCrsJson = json.dumps(data)
 
 
-def importLayer(layer, prefs, pointSize):
+def importLayer(context, layer, project, prefs, options):
 	'''Run the BlenderGIS importer matching the layer kind'''
+	if layer.kind == qgis.XYZ:
+		return importXYZ(context, layer, project, prefs, options)
 	if layer.kind == qgis.SHP:
 		return bpy.ops.importgis.shapefile(filepath=layer.path, shpCRS=layer.crs)
 	if layer.kind == qgis.GEOJSON:
@@ -293,8 +322,68 @@ def importLayer(layer, prefs, pointSize):
 	if layer.kind == qgis.POINTCLOUD:
 		#the CRS QGIS uses for the layer, it also covers files without CRS in their header
 		return bpy.ops.importgis.laz(filepath=layer.path, files=[{'name': os.path.basename(layer.path)}],
-			crsSource='CUSTOM', customCRS=layer.crs, point_size=pointSize)
+			crsSource='CUSTOM', customCRS=layer.crs, point_size=options.point_size)
 	raise ValueError(f"Unsupported layer kind {layer.kind}")
+
+
+def importXYZ(context, layer, project, prefs, options, gridSize=32):
+	'''
+	Download the XYZ tiles covering the QGIS map view and drape them on a grid mesh.
+	The tiles are web mercator: the grid vertices are reprojected to the scene CRS with pyproj
+	(no image warping needed), its uv map stays linear in web mercator space.
+	'''
+	if not bpy.app.online_access:
+		raise IOError("Online access is disabled")
+	if project.canvasExtent is None or not project.crs:
+		raise ValueError("The project has no map view extent to download the basemap for")
+	geoscn = GeoScene(context.scene)
+	xyz = layer.xyz
+	toWM = pyproj.Transformer.from_crs(project.crs, 'EPSG:3857', always_xy=True)
+	bbox = toWM.transform_bounds(*project.canvasExtent, densify_pts=21)
+	zoom = zoomForResolution(max(bbox[2] - bbox[0], bbox[3] - bbox[1]) / options.basemap_size, xyz['zmin'], xyz['zmax'])
+	if tileCount(bbox, zoom) > MAX_TILES:
+		raise ValueError(f"{tileCount(bbox, zoom)} tiles needed at zoom {zoom}, reduce the basemap size or the QGIS map view")
+
+	srckey = registerXYZSource(xyz['url'], xyz['zmin'], xyz['zmax'], xyz['referer'], layer.name)
+	mosaic, nbMissing = fetchXYZ(srckey, bbox, zoom, prefs.cacheFolder)
+	if nbMissing:
+		options.report({'WARNING'}, f"{layer.name}: {nbMissing} tiles could not be downloaded (shown grey), import again to retry")
+
+	#keep the mosaic with its world file next to the tiles cache, the plane image and Colorize read it
+	folder = os.path.join(prefs.cacheFolder, 'qgis_basemaps')
+	os.makedirs(folder, exist_ok=True)
+	path = os.path.join(folder, f"{re.sub(r'[^A-Za-z0-9_-]+', '_', layer.name)}_z{zoom}.png")
+	mosaic.save(path)
+	img = bpy.data.images.load(path, check_existing=True)
+	img.reload()
+
+	#grid over the mosaic extent, from web mercator to scene coordinates
+	extent = mosaic.georef.bbox #tile aligned, a bit larger than the map view
+	xmin, ymin, xmax, ymax = extent.xmin, extent.ymin, extent.xmax, extent.ymax
+	steps = [i / gridSize for i in range(gridSize + 1)]
+	wmPts = [(xmin + (xmax - xmin) * u, ymin + (ymax - ymin) * v) for v in steps for u in steps]
+	toScene = pyproj.Transformer.from_crs('EPSG:3857', geoscn.crs, always_xy=True)
+	xs, ys = toScene.transform([p[0] for p in wmPts], [p[1] for p in wmPts])
+	dx, dy = geoscn.getOriginPrj()
+	verts = [(x - dx, y - dy, 0) for x, y in zip(xs, ys)]
+	n = gridSize + 1
+	faces = [(j * n + i, j * n + i + 1, (j + 1) * n + i + 1, (j + 1) * n + i) for j in range(gridSize) for i in range(gridSize)]
+	mesh = bpy.data.meshes.new(layer.name)
+	mesh.from_pydata(verts, [], faces)
+	uvLayer = mesh.uv_layers.new(name='rastUVmap')
+	uvs = [(i / gridSize, j / gridSize) for j in range(n) for i in range(n)]
+	for loop in mesh.loops:
+		uvLayer.data[loop.index].uv = uvs[loop.vertex_index]
+	mesh.update()
+
+	obj = placeObj(mesh, layer.name)
+	mat = bpy.data.materials.new('rastMat')
+	obj.data.materials.append(mat)
+	addTexture(mat, img, uvLayer, name='rastText')
+	obj['bgis_raster_path'] = path
+	obj['bgis_raster_crs'] = 'EPSG:3857'
+	obj['bgis_basemap_zoom'] = zoom
+	return {'FINISHED'}
 
 
 def organizeObjects(context, objs, layer, project, collections):

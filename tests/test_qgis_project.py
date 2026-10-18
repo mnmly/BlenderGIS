@@ -85,7 +85,8 @@ def test_kinds_paths_and_crs(tmp_path, dataDir):
 	assert byId['pois'].crs == 'EPSG:4326'
 	assert byId['city'].kind == qp.GPKG and byId['city'].subset == 'layername=buildings' and not byId['city'].supported
 	assert byId['trace'].kind == qp.UNSUPPORTED and 'kml' in byId['trace'].reason
-	assert byId['osm'].kind == qp.XYZ and not byId['osm'].supported and byId['osm'].path is None
+	assert byId['osm'].kind == qp.XYZ and byId['osm'].supported and byId['osm'].path is None
+	assert byId['osm'].xyz == {'url': 'https://tile.openstreetmap.org/{z}/{x}/{y}.png', 'zmin': 0, 'zmax': 19, 'referer': ''}
 	assert byId['db'].kind == qp.UNSUPPORTED and 'postgres' in byId['db'].reason
 	assert byId['roads'].color == pytest.approx((141 / 255, 90 / 255, 153 / 255, 1))
 	assert [l.order for l in prj.layers] == list(range(9))
@@ -142,6 +143,19 @@ def test_not_a_project(tmp_path):
 	path.write_text('not xml at all')
 	with pytest.raises(qp.QgisProjectError):
 		qp.QgisProject.load(str(path))
+
+
+def test_xyz_variants(tmp_path):
+	layers = [
+		maplayer('tms', 'raster', 'wms', 'crs=EPSG:3857&amp;format&amp;type=xyz&amp;url=https://tiles.example.org/%7Bz%7D/%7Bx%7D/%7B-y%7D.jpg&amp;zmax=17&amp;zmin=2&amp;http-header:referer=https://example.org', crs=''),
+		maplayer('bad', 'raster', 'wms', 'type=xyz&amp;url=https://tiles.example.org/tile.png', crs='EPSG:3857'),
+		maplayer('wmts', 'raster', 'wms', 'contextualWMSLegend=0&amp;layers=ortho&amp;url=https://wmts.example.org', crs='EPSG:3857'),
+	]
+	prj = qp.QgisProject.load(write(tmp_path, project(''.join(treeLayer(i) for i in ('tms', 'bad', 'wmts')), layers)))
+	tms, bad, wmts = prj.layers
+	assert tms.supported and tms.xyz == {'url': 'https://tiles.example.org/{z}/{x}/{-y}.jpg', 'zmin': 2, 'zmax': 17, 'referer': 'https://example.org'}
+	assert bad.kind == qp.XYZ and not bad.supported and 'template' in bad.reason
+	assert wmts.kind == qp.UNSUPPORTED and 'WMS' in wmts.reason
 
 
 @pytest.mark.skipif(not os.path.exists(os.path.join(ROOT, 'demo.qgz')), reason="local demo project not available")

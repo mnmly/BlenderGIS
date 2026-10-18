@@ -29,7 +29,7 @@ import os
 import re
 import zipfile
 import xml.etree.ElementTree as ET
-from urllib.parse import unquote
+from urllib.parse import unquote, parse_qsl
 
 
 #Layer kinds, the importer to use for each layer
@@ -42,7 +42,7 @@ XYZ = 'XYZ'
 GPKG = 'GPKG'
 UNSUPPORTED = 'UNSUPPORTED'
 
-SUPPORTED_KINDS = {SHP, GEOJSON, RASTER, ASC, POINTCLOUD}
+SUPPORTED_KINDS = {SHP, GEOJSON, RASTER, ASC, POINTCLOUD, XYZ}
 
 RASTER_EXTENSIONS = {'.tif', '.tiff', '.geotiff', '.jp2', '.png', '.jpg', '.jpeg', '.bmp'}
 POINTCLOUD_EXTENSIONS = {'.las', '.laz'}
@@ -72,6 +72,7 @@ class Layer():
 		self.groupPath = () #names of the parent groups, from the root
 		self.order = 0 #position in the layer tree, 0 is the top (drawn above the others)
 		self.color = None #(r, g, b, a) floats of a single symbol renderer
+		self.xyz = None #XYZ tiles parameters: dict with url, zmin, zmax, referer
 		self.kind = UNSUPPORTED
 		self.reason = None #why the layer cannot be imported
 
@@ -156,10 +157,12 @@ class QgisProject():
 		if layer.provider in LOCAL_PROVIDERS:
 			path, layer.subset = self._resolvePath(layer.datasource)
 			layer.path = path
+		if layer.provider == 'wms':
+			layer.xyz = _readXYZ(layer.datasource)
 		layer.kind, layer.reason = _classify(layer)
 		if layer.reason is None and layer.path is not None and not os.path.exists(layer.path):
 			layer.reason = "File not found: " + layer.path
-		if layer.reason is None and layer.kind in SUPPORTED_KINDS and not layer.crs:
+		if layer.reason is None and layer.kind in SUPPORTED_KINDS and layer.kind != XYZ and not layer.crs: #XYZ tiles are always web mercator
 			layer.reason = "Layer has no CRS in the project"
 
 	def _resolvePath(self, datasource):
@@ -194,6 +197,26 @@ def _parseColor(value):
 		rgba.append(255)
 	return tuple(c / 255 for c in rgba) if len(rgba) == 4 else None
 
+def _readXYZ(datasource):
+	'''Parameters of a QGIS XYZ tiles datasource ("type=xyz&url=...&zmin=0&zmax=19"), or None'''
+	params = dict(parse_qsl(datasource, keep_blank_values=True))
+	if params.get('type') != 'xyz' or not params.get('url'):
+		return None
+	def toInt(value, default):
+		try:
+			return int(value)
+		except (TypeError, ValueError):
+			return default
+	return {
+		'url': params['url'],
+		'zmin': toInt(params.get('zmin'), 0),
+		'zmax': toInt(params.get('zmax'), 19),
+		'referer': params.get('referer') or params.get('http-header:referer') or '',
+	}
+
+def _isValidXYZUrl(url):
+	return url.startswith(('http://', 'https://')) and (('{x}' in url and '{z}' in url and ('{y}' in url or '{-y}' in url)) or '{q}' in url)
+
 def _readSymbolColor(ml):
 	'''Color of a single symbol vector renderer (fill color for polygons, line color for lines)'''
 	renderer = ml.find('renderer-v2')
@@ -226,8 +249,10 @@ def _classify(layer):
 		return UNSUPPORTED, f"Vector format '{ext or layer.datasource[:40]}' is not supported yet"
 	if layer.type == 'raster':
 		if layer.provider == 'wms':
-			if 'type=xyz' in layer.datasource:
-				return XYZ, "Web basemaps (XYZ tiles) are not supported yet"
+			if layer.xyz is not None:
+				if _isValidXYZUrl(layer.xyz['url']):
+					return XYZ, None
+				return XYZ, "Unsupported XYZ url template: " + layer.xyz['url'][:60]
 			return UNSUPPORTED, "WMS/WMTS layers are not supported"
 		if layer.provider != 'gdal':
 			return UNSUPPORTED, f"Raster provider '{layer.provider}' is not supported"
