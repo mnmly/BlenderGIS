@@ -19,6 +19,7 @@
 #  All rights reserved.
 #  ***** GPL LICENSE BLOCK *****
 
+import os
 import logging
 log = logging.getLogger(__name__)
 
@@ -26,14 +27,18 @@ import bpy
 import numpy as np
 import pyproj #bundled as wheel (see blender_manifest.toml)
 
-from bpy_extras.io_utils import ImportHelper
 from bpy.props import StringProperty, EnumProperty
 from bpy.types import Operator
 
 from ..geoscene import GeoScene
+from ..core.georaster import GeoRaster
 from ..prefs import PredefCRS
 from .utils import bpyGeoRaster, newRasterPointCloudMaterial, setPointColors, getPointColors
 from .utils.pointcloud_utils import UV_ATTRIBUTE, POINTCLOUD_RASTER_MATERIAL
+
+#custom properties set by the georaster importer on the objects it creates
+RASTER_PATH_PROP = 'bgis_raster_path'
+RASTER_CRS_PROP = 'bgis_raster_crs'
 from .pointcloud_display import setColorBy
 
 
@@ -65,16 +70,61 @@ def linearToSrgb(c):
 	return np.where(c <= 0.0031308, c * 12.92, 1.055 * np.power(np.clip(c, 0.0031308, None), 1 / 2.4) - 0.055)
 
 
-class OBJECT_OT_colorize_points(Operator, ImportHelper):
+def rasterImageOf(obj):
+	"""Georeferenced raster displayed by a mesh (e.g. a BlenderGIS raster plane): its file backed image texture, or None"""
+	if obj.type != 'MESH':
+		return None
+	for mat in obj.data.materials:
+		if mat is None or mat.node_tree is None:
+			continue
+		for node in mat.node_tree.nodes:
+			if node.type == 'TEX_IMAGE' and node.image is not None and node.image.source == 'FILE':
+				if os.path.isfile(bpy.path.abspath(node.image.filepath, library=node.image.library)):
+					return node.image
+	return None
+
+def rasterPath(obj, img):
+	"""File holding the raster georeferencing: the path stored at import, or the image file"""
+	path = obj.get(RASTER_PATH_PROP)
+	if path and os.path.isfile(path):
+		return path
+	return bpy.path.abspath(img.filepath, library=img.library)
+
+#Blender needs the strings of dynamic enum items to stay referenced
+_rasterItems = []
+
+def listSceneRasters(self, context):
+	_rasterItems[:] = [(obj.name, obj.name, "Raster displayed by " + obj.name, 'IMAGE_DATA', i)
+		for i, obj in enumerate(o for o in context.scene.objects if rasterImageOf(o) is not None)]
+	return _rasterItems or [('NONE', 'No raster in the scene', "Import a georeferenced raster first", 'ERROR', 0)]
+
+
+class OBJECT_OT_colorize_points(Operator):
 	"""Color point clouds (or any mesh vertices) from a georeferenced raster, like an orthophoto, projected from above"""
 	bl_idname = "object.colorize_points"
-	bl_description = 'Color selected point clouds from a georeferenced raster'
+	bl_description = 'Color selected point clouds from a georeferenced raster, in the scene or from a file'
 	bl_label = "Colorize points from raster"
 	bl_options = {"UNDO"}
 
-	filter_glob: StringProperty(
-		default="*.tif;*.tiff;*.jpg;*.jpeg;*.png;*.jp2;*.bmp",
-		options={'HIDDEN'},
+	source: EnumProperty(
+		name = "Source",
+		items = [
+			('SCENE', 'Scene raster', "A georeferenced raster already in the scene, e.g. imported with BlenderGIS or from a QGIS project"),
+			('FILE', 'File', "A georeferenced raster file: GeoTIFF, or an image with a world file")
+			],
+		default = 'FILE'
+		)
+
+	rasterObject: EnumProperty(
+		name = "Raster",
+		description = "Raster object of the scene whose image colors the points",
+		items = listSceneRasters,
+		)
+
+	filepath: StringProperty(
+		name = "File",
+		description = "Georeferenced raster: GeoTIFF, or an image (jpg, png, tif...) with a world file",
+		subtype = 'FILE_PATH',
 		)
 
 	def listRasterCRS(self, context):
@@ -99,9 +149,30 @@ class OBJECT_OT_colorize_points(Operator, ImportHelper):
 	def poll(cls, context):
 		return context.mode == 'OBJECT' and any(obj.type == 'MESH' for obj in context.selected_objects)
 
+	def invoke(self, context, event):
+		#prefer a raster already in the scene, like a layer imported from a QGIS project
+		hasSceneRaster = listSceneRasters(self, context)[0][0] != 'NONE'
+		self.source = 'SCENE' if hasSceneRaster else 'FILE'
+		return context.window_manager.invoke_props_dialog(self, width=420)
+
+	def sceneRaster(self, context):
+		obj = context.scene.objects.get(self.rasterObject)
+		return obj, (rasterImageOf(obj) if obj is not None else None)
+
 	def draw(self, context):
 		layout = self.layout
-		layout.prop(self, 'rasterCRS')
+		layout.prop(self, 'source', expand=True)
+		storedCRS = None
+		if self.source == 'SCENE':
+			layout.prop(self, 'rasterObject')
+			obj, img = self.sceneRaster(context)
+			storedCRS = obj.get(RASTER_CRS_PROP) if obj is not None else None
+		else:
+			layout.prop(self, 'filepath')
+		if storedCRS:
+			layout.label(text=f"Raster CRS: {storedCRS}", icon='INFO')
+		else:
+			layout.prop(self, 'rasterCRS')
 		layout.prop(self, 'mode', expand=True)
 
 	def execute(self, context):
@@ -110,17 +181,31 @@ class OBJECT_OT_colorize_points(Operator, ImportHelper):
 			self.report({'ERROR'}, "Scene is not georeferenced, import the point cloud first")
 			return {'CANCELLED'}
 
+		rasterCRS = self.rasterCRS
+		fileRaster = rasterObj = None
 		try:
-			rast = bpyGeoRaster(self.filepath)
+			if self.source == 'SCENE':
+				rasterObj, img = self.sceneRaster(context)
+				if img is None:
+					self.report({'ERROR'}, "Choose a georeferenced raster of the scene")
+					return {'CANCELLED'}
+				#georeferencing comes from the raster file, colors from the image already loaded in Blender
+				georef = GeoRaster(rasterPath(rasterObj, img)).georef
+				rasterCRS = rasterObj.get(RASTER_CRS_PROP, rasterCRS)
+			else:
+				fileRaster = bpyGeoRaster(bpy.path.abspath(self.filepath))
+				img, georef = fileRaster.bpyImg, fileRaster.georef
 		except IOError as e:
 			log.error("Unable to open raster", exc_info=True)
-			self.report({'ERROR'}, f"Unable to open the georeferenced raster: {e}")
+			self.report({'ERROR'}, f"Unable to read the georeferenced raster: {e}")
 			return {'CANCELLED'}
-		img = rast.bpyImg
-		w, h = rast.size
+		w, h = georef.rSize
+		if tuple(img.size) != (w, h):
+			self.report({'ERROR'}, f"Image size {tuple(img.size)} does not match its georeferencing {(w, h)}")
+			return {'CANCELLED'}
 
-		if self.rasterCRS != 'SCENE' and self.rasterCRS != geoscn.crs:
-			toRaster = pyproj.Transformer.from_crs(pyproj.CRS.from_user_input(geoscn.crs), pyproj.CRS.from_user_input(self.rasterCRS), always_xy=True)
+		if rasterCRS != 'SCENE' and rasterCRS != geoscn.crs:
+			toRaster = pyproj.Transformer.from_crs(pyproj.CRS.from_user_input(geoscn.crs), pyproj.CRS.from_user_input(rasterCRS), always_xy=True)
 		else:
 			toRaster = None
 
@@ -135,12 +220,12 @@ class OBJECT_OT_colorize_points(Operator, ImportHelper):
 			mat = bpy.data.materials.get(POINTCLOUD_RASTER_MATERIAL + '.' + img.name) or newRasterPointCloudMaterial(img)
 
 		nPoints = nInside = 0
-		for obj in [obj for obj in context.selected_objects if obj.type == 'MESH']:
+		for obj in [obj for obj in context.selected_objects if obj.type == 'MESH' and obj != rasterObj]:
 			mesh = obj.data
 			x, y = pointsGeoCoords(obj, geoscn)
 			if toRaster is not None:
 				x, y = toRaster.transform(x, y)
-			xPx, yPx = geoToPx(rast.georef, x, y)
+			xPx, yPx = geoToPx(georef, x, y)
 			inside = (xPx >= 0) & (xPx < w) & (yPx >= 0) & (yPx < h)
 			nPoints += len(inside)
 			nInside += int(inside.sum())
@@ -163,8 +248,8 @@ class OBJECT_OT_colorize_points(Operator, ImportHelper):
 				setColorBy(obj, 'RGB')
 			mesh.update()
 
-		if self.mode == 'BAKE' and img.users == 0:
-			rast.unload()
+		if fileRaster is not None and self.mode == 'BAKE' and img.users == 0:
+			fileRaster.unload()
 
 		if nInside == 0:
 			self.report({'WARNING'}, "The raster does not overlap the selected points, check the raster CRS")

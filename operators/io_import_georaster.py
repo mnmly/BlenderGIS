@@ -278,6 +278,9 @@ class IMPORTGIS_OT_georaster(Operator, ImportHelper):
 			obj.data.materials.append(mat)
 			# Add texture to material
 			addTexture(mat, rast.bpyImg, uvTxtLayer, name='rastText')
+			# Remember the raster source, used to drape it (Colorize points from raster)
+			obj['bgis_raster_path'] = rast.path
+			obj['bgis_raster_crs'] = rastCRS
 
 		######################################
 		if self.importMode == 'BKG':#background
@@ -360,6 +363,9 @@ class IMPORTGIS_OT_georaster(Operator, ImportHelper):
 			mat = bpy.data.materials.new('rastMat')
 			obj.data.materials.append(mat)
 			addTexture(mat, rast.bpyImg, uvTxtLayer, name='rastText')
+			# Remember the raster source, used to drape it (Colorize points from raster)
+			obj['bgis_raster_path'] = rast.path
+			obj['bgis_raster_crs'] = rastCRS
 
 		######################################
 		if self.importMode == 'DEM':
