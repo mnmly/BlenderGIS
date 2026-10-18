@@ -58,6 +58,13 @@ import pyproj
 
 PKG = __package__.rsplit('.', 1)[0]
 
+def crs_to_scene_string(crs):
+	'''Convert a pyproj CRS to the string representation expected by GeoScene.crs (AUTH:CODE, or proj4 as last resort)'''
+	authority = crs.to_authority()
+	if authority is not None:
+		return ':'.join(authority)
+	return crs.to_proj4()
+
 class IMPORTLAZ_OT_georaster(Operator, ImportHelper):
 	"""Import georeferenced LAZ/LAS point cloud"""
 	bl_idname = "importgis.laz"  # important since its how bpy.ops.importgis.laz is constructed (allows calling operator from python console or another script)
@@ -89,22 +96,20 @@ class IMPORTLAZ_OT_georaster(Operator, ImportHelper):
 		options = {'HIDDEN', 'SKIP_SAVE'}
 	)
 	
-	pointCRS: EnumProperty(
-		name = "Point Cloud CRS",
-		description = "Choose a Coordinate Reference System",
-		items = listPredefCRS,
+	crsSource: EnumProperty(
+		name = "CRS",
+		description = "Where to read the point cloud Coordinate Reference System from",
+		items = [
+			('FILE', 'From file', "Use the CRS stored in the LAS header, or the CRS below when the file has none"),
+			('CUSTOM', 'Custom', "Ignore the LAS header and always use the CRS below")
+			],
+		default = 'FILE'
 		)
-	
-	fallbackCRS: EnumProperty(
-		name = "Fallback CRS",
-		description = "Choose a Coordinate Reference System when LIDAR data doesn't contain CRS metadata",
+
+	customCRS: EnumProperty(
+		name = "Point cloud CRS",
+		description = "Coordinate Reference System of the point cloud, used when the file has none or when Custom is selected",
 		items = listPredefCRS,
-		)
-	
-	use_fallback: BoolProperty(
-		name="Use Fallback",
-		description="Skip parsing CRS from LAS header and use fallback CRS directly",
-		default=False
 		)
 	
 	import_scale: FloatProperty(
@@ -121,11 +126,6 @@ class IMPORTLAZ_OT_georaster(Operator, ImportHelper):
 		default=True,
 	)
 
-	reprojection: BoolProperty(
-			name="Specify point cloud CRS",
-			description="Specify point cloud CRS if it's different from scene CRS",
-			default=False )
-	
 	# Point cloud specific options
 	point_size: FloatProperty(
 		name = "Point Size",
@@ -162,33 +162,19 @@ class IMPORTLAZ_OT_georaster(Operator, ImportHelper):
 			else:
 				layout.label(text="No georeferenced mesh available for clipping")
 		
-		# CRS handling
+		# CRS handling: points are always reprojected to the scene CRS,
+		# an ungeoreferenced scene adopts the point cloud CRS
+		layout.prop(self, 'crsSource', expand=True)
+		row = layout.row(align=True)
+		split = row.split(factor=0.35, align=True)
+		split.label(text='CRS if missing:' if self.crsSource == 'FILE' else 'CRS:')
+		split.prop(self, "customCRS", text='')
+		row.operator("bgis.add_predef_crs", text='', icon='ADD')
+
 		if geoscn.isPartiallyGeoref:
-			layout.prop(self, 'reprojection')
-			if self.reprojection:
-				self.crsInputLayout(context)
 			georefManagerLayout(self, context)
 		else:
-			self.crsInputLayout(context)
-		
-		self.fallbackCRSInputLayout(context)
-
-	def crsInputLayout(self, context):
-		layout = self.layout
-		row = layout.row(align=True)
-		split = row.split(factor=0.35, align=True)
-		split.label(text='Point Cloud CRS:')
-		split.prop(self, "pointCRS", text='')
-		row.operator("bgis.add_predef_crs", text='', icon='ADD')
-
-	def fallbackCRSInputLayout(self, context):
-		layout = self.layout
-		row = layout.row(align=True)
-		split = row.split(factor=0.35, align=True)
-		split.label(text='Fallback CRS:')
-		split.prop(self, "fallbackCRS", text='')
-		row.operator("bgis.add_predef_crs", text='', icon='ADD')
-		layout.prop(self, "use_fallback")
+			layout.label(text="Scene will use the point cloud CRS", icon='INFO')
 
 	@classmethod
 	def poll(cls, context):
@@ -208,40 +194,7 @@ class IMPORTLAZ_OT_georaster(Operator, ImportHelper):
 
 		scale = geoscn.scale
 
-		# Handle CRS setup - following IMPORTGIS_OT_georaster pattern
-		if geoscn.isGeoref:
-			dx, dy = geoscn.getOriginPrj()
-			if self.reprojection:
-				pointCRS = self.pointCRS
-			else:
-				pointCRS = geoscn.crs
-		else: #if not geoscn.hasCRS
-			pointCRS = self.pointCRS
-			try:
-				geoscn.crs = pointCRS
-			except Exception as e:
-				log.error("Cannot set scene crs", exc_info=True)
-				self.report({'ERROR'}, "Cannot set scene crs, check logs for more infos")
-				return {'CANCELLED'}
-
-		# Point cloud reprojection setup - following IMPORTGIS_OT_georaster pattern
-		if geoscn.crs != pointCRS:
-			rprj = True
-			rprjToPointCloud = Reproj(geoscn.crs, pointCRS)
-			rprjToScene = Reproj(pointCRS, geoscn.crs)
-			# Vectorized transformer for per-vertex reprojection (much faster than Reproj.pt loop)
-			pyprojToScene = pyproj.Transformer.from_crs(
-				pyproj.CRS.from_string(pointCRS),
-				pyproj.CRS.from_string(geoscn.crs),
-				always_xy=True,
-			)
-		else:
-			rprj = False
-			rprjToPointCloud = None
-			rprjToScene = None
-			pyprojToScene = None
-
-		# Handle clipping extent if requested
+		# Handle clipping extent if requested (in scene CRS, like the reprojected points)
 		subBox = None
 		if self.clip:
 			if not geoscn.isGeoref or len(self.objectsLst) == 0:
@@ -250,11 +203,8 @@ class IMPORTLAZ_OT_georaster(Operator, ImportHelper):
 			# Get chosen object for clipping extent
 			clipObj = scn.objects[int(self.objectsLst)]
 			subBox = getBBOX.fromObj(clipObj).toGeo(geoscn)
-			if rprj:
-				subBox = rprjToPointCloud.bbox(subBox)
 
 		new_objects_created = []
-		all_original_coords = []  # Store original coordinates for global centroid calculation
 
 		# Process each LAZ/LAS file
 		for f in self.files:
@@ -268,20 +218,28 @@ class IMPORTLAZ_OT_georaster(Operator, ImportHelper):
 				self.report({'ERROR'}, f"Unable to open {name}, check logs for more infos")
 				continue
 
-			# Get point cloud coordinates and handle CRS
-			xyz, source_crs, is_fallback = self.get_transformed_coordinates(las, pointCRS, self.fallbackCRS, self.use_fallback)
-			
-			if xyz is None:
-				continue
+			source_crs, is_fallback = self.get_source_crs(las, name)
 
-			# Store original coordinates for global centroid calculation
-			if not geoscn.isGeoref:
-				all_original_coords.append(xyz.copy())
+			# An ungeoreferenced scene adopts the CRS of the first point cloud, so no reprojection is needed
+			if not geoscn.hasCRS:
+				try:
+					geoscn.crs = crs_to_scene_string(source_crs)
+				except Exception as e:
+					log.error("Cannot set scene crs", exc_info=True)
+					self.report({'ERROR'}, "Cannot set scene crs, check logs for more infos")
+					return {'CANCELLED'}
+
+			# Get point cloud coordinates in scene CRS
+			xyz = las.xyz.copy()
+			scene_crs = pyproj.CRS.from_user_input(geoscn.crs)
+			if not source_crs.equals(scene_crs, ignore_axis_order=True):
+				# Vectorized reprojection (much faster than a Reproj.pt loop)
+				transformer = pyproj.Transformer.from_crs(source_crs, scene_crs, always_xy=True)
+				xyz[:, 0], xyz[:, 1] = transformer.transform(xyz[:, 0], xyz[:, 1])
 
 			# Apply clipping if requested
 			if subBox:
-				# Convert subBox to point cloud coordinates for clipping
-				mask = ((xyz[:, 0] >= subBox.xmin) & (xyz[:, 0] <= subBox.xmax) & 
+				mask = ((xyz[:, 0] >= subBox.xmin) & (xyz[:, 0] <= subBox.xmax) &
 						(xyz[:, 1] >= subBox.ymin) & (xyz[:, 1] <= subBox.ymax))
 				if not np.any(mask):
 					self.report({'WARNING'}, f"No points in clipping extent for {name}")
@@ -297,30 +255,23 @@ class IMPORTLAZ_OT_georaster(Operator, ImportHelper):
 				'las': las
 			})
 
-		# Calculate global scene origin if not already georeferenced
-		if not geoscn.isGeoref and all_original_coords:
-			# Calculate global centroid from all original point clouds
-			all_points = np.vstack(all_original_coords)
+		# Set scene origin at the center of all point clouds if not already georeferenced
+		if not geoscn.isGeoref and new_objects_created:
+			all_points = np.vstack([obj_data['xyz'] for obj_data in new_objects_created])
 			center_x = (np.min(all_points[:, 0]) + np.max(all_points[:, 0])) / 2
 			center_y = (np.min(all_points[:, 1]) + np.max(all_points[:, 1])) / 2
-			if rprj:
-				center_x, center_y = rprjToScene.pt(center_x, center_y)
-			dx, dy = center_x, center_y
-			geoscn.setOriginPrj(dx, dy)
+			geoscn.setOriginPrj(center_x, center_y)
+
+		if geoscn.isGeoref:
+			dx, dy = geoscn.getOriginPrj()
 
 		# Now create the actual Blender objects with proper positioning
 		final_objects = []
 		for obj_data in new_objects_created:
 			xyz = obj_data['xyz']
 			name = obj_data['name']
-			
-			# Transform to scene coordinates if needed (vectorized via pyproj)
-			if rprj:
-				tx, ty = pyprojToScene.transform(xyz[:, 0], xyz[:, 1])
-				xyz[:, 0] = tx
-				xyz[:, 1] = ty
 
-			# Offset by scene origin (now that we have the global origin)
+			# Offset by scene origin
 			if geoscn.isGeoref:
 				xyz[:, 0] -= dx
 				xyz[:, 1] -= dy
@@ -387,44 +338,23 @@ class IMPORTLAZ_OT_georaster(Operator, ImportHelper):
 		self.report({'INFO'}, f"Successfully imported {len(final_objects)} point cloud(s)")
 		return {'FINISHED'}
 
-	def get_transformed_coordinates(self, las_file, target_crs_str, fallback_crs_str, use_fallback=False):
-		"""Extract and transform coordinates from LAS file, handling CRS detection"""
-		if use_fallback:
-			# Skip header parsing and use fallback CRS directly
-			source_crs = pyproj.CRS.from_string(fallback_crs_str)
-			is_fallback = True
-			self.report({'INFO'}, f"Using fallback CRS as requested: {fallback_crs_str}")
-		else:
-			source_crs = None
+	def get_source_crs(self, las_file, name):
+		"""Return the horizontal CRS of the point cloud and whether it comes from the user choice instead of the file"""
+		source_crs = None
+		if self.crsSource == 'FILE':
 			try:
-				# Try to get CRS from LAS header
 				source_crs = las_file.header.parse_crs()
 			except (pyproj.exceptions.CRSError, AttributeError):
-				source_crs = None
-			if source_crs:
-				is_fallback = False
-			else:
-				# Header had no CRS (parse_crs returned None) or parsing failed — use fallback
-				source_crs = pyproj.CRS.from_string(fallback_crs_str)
-				is_fallback = True
-				self.report({'WARNING'}, f"Could not detect CRS from file, using fallback: {fallback_crs_str}")
-
-		if not source_crs:
-			self.report({'ERROR'}, "Could not determine coordinate reference system")
-			return None, None, None
-
-		# Setup coordinate transformation if needed
-		target_crs = pyproj.CRS.from_string(target_crs_str)
-		
-		xyz = las_file.xyz.copy()
-		
-		if source_crs != target_crs:
-			transformer = pyproj.Transformer.from_crs(source_crs, target_crs, always_xy=True)
-			x_trans, y_trans = transformer.transform(xyz[:, 0], xyz[:, 1])
-			xyz[:, 0] = x_trans
-			xyz[:, 1] = y_trans
-
-		return xyz, source_crs, is_fallback
+				log.warning("Cannot parse CRS from LAS header", exc_info=True)
+			if source_crs is None:
+				self.report({'WARNING'}, f"No CRS found in {name}, using {self.customCRS}")
+		is_custom = source_crs is None
+		if is_custom:
+			source_crs = pyproj.CRS.from_user_input(self.customCRS)
+		# Keep the horizontal part of compound CRS (horizontal + vertical), z values are left untouched
+		if source_crs.is_compound:
+			source_crs = next((sub for sub in source_crs.sub_crs_list if sub.is_projected or sub.is_geographic), source_crs)
+		return source_crs, is_custom
 
 	# Bit-field sub-views laspy unpacks from packed bytes — usually redundant
 	# (the underlying packed dim is also exposed) and expensive to materialize.
