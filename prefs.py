@@ -406,32 +406,39 @@ class BGIS_OT_add_predef_crs(Operator):
 
 	def search(self, context):
 
-		apiKey = settings.maptiler_api_key
+		if HAS_PYPROJ:
+			#offline search into the EPSG database shipped with pyproj
+			results = SRS.search(self.query)
+		else:
+			#fallback to MapTiler Coordinates web service
+			apiKey = settings.maptiler_api_key
+			if not apiKey:
+				#self.report({'ERROR'}, "MapTiler API key is required. Please set it in the preferences.") #report is not available outsite of the execute function
+				log.error("No Maptiler API key")
+				return
+			if not bpy.app.online_access:
+				log.error("Online access is disabled, cannot search crs with MapTiler")
+				return
+			mtc = MapTilerCoordinates(apiKey=apiKey)
+			results = [{'code': str(r['id']['code']), 'name': r['name']} for r in mtc.search(self.query)]
 
-		if not apiKey:
-			#self.report({'ERROR'}, "MapTiler API key is required. Please set it in the preferences.") #report is not available outsite of the execute function
-			log.error("No Maptiler API key")
-			return
-
-		mtc = MapTilerCoordinates(apiKey=apiKey)
-		results = mtc.search(self.query)
 		self.results = json.dumps(results)
 		if results:
-			self.crs = 'EPSG:' + str(results[0]['id']['code'])
+			self.crs = 'EPSG:' + results[0]['code']
 			self.name = results[0]['name']
 
 	def updEnum(self, context):
 		crsItems = []
 		if self.results != '':
 			for result in json.loads(self.results):
-				srid = 'EPSG:' + str(result['id']['code'])
-				crsItems.append( (str(result['id']['code']), result['name'], srid) )
+				srid = 'EPSG:' + result['code']
+				crsItems.append( (result['code'], result['name'], srid) )
 		return crsItems
 
 	def fill(self, context):
 		if self.results != '':
-			crs = [crs for crs in json.loads(self.results) if str(crs['id']['code']) == self.crsEnum][0]
-			self.crs = 'EPSG:' + str(crs['id']['code'])
+			crs = [crs for crs in json.loads(self.results) if crs['code'] == self.crsEnum][0]
+			self.crs = 'EPSG:' + crs['code']
 			self.desc = crs['name']
 
 	query: StringProperty(name='Query', description='Hit enter to process the search', update=search)
@@ -452,7 +459,7 @@ class BGIS_OT_add_predef_crs(Operator):
 		layout.prop(self, 'search')
 		if self.search:
 			prefs = context.preferences.addons[PKG].preferences
-			if not prefs.maptiler_api_key:
+			if not HAS_PYPROJ and not prefs.maptiler_api_key:
 				layout.label(text="Searching require a MapTiler API key", icon_value=3)
 				layout.prop(prefs, "maptiler_api_key", text='API Key')
 			else:

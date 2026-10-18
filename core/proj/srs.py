@@ -36,6 +36,34 @@ class SRS():
 	A simple class to handle Spatial Ref System inputs
 	'''
 
+	_epsgIndex = None #(code, name) of EPSG horizontal crs, loaded on first search
+
+	@classmethod
+	def search(cls, query, limit=50):
+		'''
+		Search EPSG projected and geographic 2D crs by code or name words
+		into the PROJ database shipped with pyproj (offline, no api key needed)
+		Return a list of dict {'code', 'name'}, exact code match first
+		'''
+		if not HAS_PYPROJ:
+			raise ImportError('PYPROJ not available')
+		if cls._epsgIndex is None:
+			from pyproj.database import query_crs_info
+			from pyproj.enums import PJType
+			infos = query_crs_info(auth_name='EPSG', pj_types=[PJType.PROJECTED_CRS, PJType.GEOGRAPHIC_2D_CRS])
+			cls._epsgIndex = [(info.code, info.name) for info in infos if not info.deprecated]
+
+		query = str(query).strip().lower()
+		if query.startswith('epsg:'):
+			query = query[5:]
+		words = query.split()
+		if not words:
+			return []
+		results = [{'code': code, 'name': name} for code, name in cls._epsgIndex
+			if code == query or all(w in name.lower() for w in words)]
+		results.sort(key=lambda r: (r['code'] != query, int(r['code']) if r['code'].isdigit() else 0))
+		return results[:limit]
+
 	@classmethod
 	def validate(cls, crs):
 		try:
@@ -208,7 +236,11 @@ class SRS():
 		if HAS_GDAL:
 			prj = self.getOgrSpatialRef()
 			return prj.ExportToWkt()
+		elif HAS_PYPROJ:
+			from pyproj.enums import WktVersion
+			crs = pyproj.CRS.from_user_input(self.SRID if self.isSRID else self.proj4)
+			return crs.to_wkt(WktVersion.WKT1_ESRI) #ESRI flavor expected in shapefile .prj
 		elif self.isEPSG:
-			return EPSGIO.getEsriWkt(self.code)
+			return EPSGIO().getEsriWkt(self.code)
 		else:
 			raise NotImplementedError
