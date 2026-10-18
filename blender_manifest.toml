@@ -27,9 +27,11 @@ license = [
 # Platforms covered by the bundled wheels (see tools/fetch_wheels.py)
 platforms = ["windows-x64", "macos-arm64", "macos-x64", "linux-x64"]
 
-# Bundled dependencies: laspy + lazrs (LAS/LAZ import) and pyproj (reprojection).
-# cp311 wheels target Blender 4.3 -> 5.0, cp313 wheels target Blender 5.1+.
-# Run `uv run --with pip tools/fetch_wheels.py` to download them before building.
+# Bundled dependencies: laspy + lazrs (LAS/LAZ import), pyproj (reprojection),
+# Pillow (image engine, basemap tiles) and pyogrio + packaging (GDAL based vector formats).
+# cp311 wheels target Blender 4.3 -> 5.0, cp313 wheels target Blender 5.1+, abi3 wheels both.
+# Run `uv run --with pip tools/fetch_wheels.py` to download them, then build one zip per
+# platform: `blender --command extension build --split-platforms`.
 wheels = [
   "./wheels/laspy-2.7.0-py3-none-any.whl",
   "./wheels/lazrs-0.8.2-cp311-cp311-macosx_10_12_x86_64.whl",
@@ -40,6 +42,19 @@ wheels = [
   "./wheels/lazrs-0.8.2-cp313-cp313-macosx_11_0_arm64.whl",
   "./wheels/lazrs-0.8.2-cp313-cp313-manylinux_2_17_x86_64.manylinux2014_x86_64.whl",
   "./wheels/lazrs-0.8.2-cp313-cp313-win_amd64.whl",
+  "./wheels/packaging-25.0-py3-none-any.whl",
+  "./wheels/pillow-13.0.0-cp311-cp311-macosx_10_10_x86_64.whl",
+  "./wheels/pillow-13.0.0-cp311-cp311-macosx_11_0_arm64.whl",
+  "./wheels/pillow-13.0.0-cp311-cp311-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl",
+  "./wheels/pillow-13.0.0-cp311-cp311-win_amd64.whl",
+  "./wheels/pillow-13.0.0-cp313-cp313-macosx_10_13_x86_64.whl",
+  "./wheels/pillow-13.0.0-cp313-cp313-macosx_11_0_arm64.whl",
+  "./wheels/pillow-13.0.0-cp313-cp313-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl",
+  "./wheels/pillow-13.0.0-cp313-cp313-win_amd64.whl",
+  "./wheels/pyogrio-0.13.0-cp311-abi3-macosx_12_0_arm64.whl",
+  "./wheels/pyogrio-0.13.0-cp311-abi3-macosx_12_0_x86_64.whl",
+  "./wheels/pyogrio-0.13.0-cp311-abi3-manylinux_2_28_x86_64.whl",
+  "./wheels/pyogrio-0.13.0-cp311-abi3-win_amd64.whl",
   "./wheels/pyproj-3.7.2-cp311-cp311-macosx_13_0_x86_64.whl",
   "./wheels/pyproj-3.7.2-cp311-cp311-macosx_14_0_arm64.whl",
   "./wheels/pyproj-3.7.2-cp311-cp311-manylinux_2_28_x86_64.whl",

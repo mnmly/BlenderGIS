@@ -6,7 +6,7 @@ fetches them into ./wheels and checks the manifest lists exactly those files.
 
 Usage (from the repository root):
 	uv run --with pip tools/fetch_wheels.py
-	blender --command extension build
+	blender --command extension build --split-platforms
 """
 
 import re
@@ -29,8 +29,10 @@ PLATFORMS = {
 	"linux-x64": ["manylinux_2_28_x86_64", "manylinux_2_17_x86_64"],
 }
 
-PURE_PACKAGES = ["laspy==2.7.0"]
-BINARY_PACKAGES = ["lazrs==0.8.2", "pyproj==3.7.2"]
+#numpy and certifi ship with Blender, packaging does not on Blender < 5
+PURE_PACKAGES = ["laspy==2.7.0", "packaging==25.0"]
+#pyogrio wheels are abi3 (cp311-abi3): the same file serves Python 3.11 and 3.13
+BINARY_PACKAGES = ["lazrs==0.8.2", "pyproj==3.7.2", "pillow==13.0.0", "pyogrio==0.13.0"]
 
 
 def pip_download(args):

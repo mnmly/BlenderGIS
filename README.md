@@ -8,11 +8,11 @@ Note : Since 2022, the OpenTopography web service requires an API key. Please re
 [Wiki](https://github.com/domlysz/BlenderGIS/wiki/Home) - [FAQ](https://github.com/domlysz/BlenderGIS/wiki/FAQ) - [Quick start guide](https://github.com/domlysz/BlenderGIS/wiki/Quick-start) - [Flowchart](https://raw.githubusercontent.com/wiki/domlysz/blenderGIS/flowchart.jpg)
 
 ### Building the extension
-LIDAR support (laspy, lazrs) and pyproj are bundled as wheels, no manual pip install needed. Download them, then build the zip:
+Dependencies are bundled as wheels, no manual pip install needed: laspy and lazrs (LIDAR), pyproj (reprojection), Pillow (images, basemap tiles) and pyogrio (GDAL based vector formats). Download them, then build one zip per platform:
 
 ```
 uv run --with pip tools/fetch_wheels.py
-blender --command extension build
+blender --command extension build --split-platforms
 ```
 
 Logs and the default basemaps cache are stored in the extension user folder (`extensions/.user/<repo>/blendergis`), previously `~/.bgis`.
