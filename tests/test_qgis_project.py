@@ -83,8 +83,8 @@ def test_kinds_paths_and_crs(tmp_path, dataDir):
 	assert all(byId[i].supported for i in ('roads', 'pois', 'ortho', 'dem', 'cloud'))
 	assert byId['roads'].path == str(dataDir / 'roads.shp')
 	assert byId['pois'].crs == 'EPSG:4326'
-	assert byId['city'].kind == qp.GPKG and byId['city'].subset == 'layername=buildings' and not byId['city'].supported
-	assert byId['trace'].kind == qp.UNSUPPORTED and 'kml' in byId['trace'].reason
+	assert byId['city'].kind == qp.OGR and byId['city'].supported and byId['city'].ogr == {'layer': 'buildings', 'where': None, 'geometryType': None}
+	assert byId['trace'].kind == qp.OGR and byId['trace'].supported and byId['trace'].ogr['layer'] is None
 	assert byId['osm'].kind == qp.XYZ and byId['osm'].supported and byId['osm'].path is None
 	assert byId['osm'].xyz == {'url': 'https://tile.openstreetmap.org/{z}/{x}/{y}.png', 'zmin': 0, 'zmax': 19, 'referer': ''}
 	assert byId['db'].kind == qp.UNSUPPORTED and 'postgres' in byId['db'].reason
@@ -143,6 +143,23 @@ def test_not_a_project(tmp_path):
 	path.write_text('not xml at all')
 	with pytest.raises(qp.QgisProjectError):
 		qp.QgisProject.load(str(path))
+
+
+def test_ogr_options(tmp_path, dataDir):
+	layers = [
+		maplayer('pts', 'vector', 'ogr', "./data/city.gpkg|layername=pois|subset=\"kind\" = 'shop'|geometrytype=Point"),
+		maplayer('byid', 'vector', 'ogr', './data/trace.kml|layerid=2'),
+	]
+	layers += [
+		maplayer('folder', 'vector', 'ogr', './data|layername=roads'), #folder of shapefiles
+		maplayer('remote', 'vector', 'ogr', '/vsicurl/https://example.org/roads.fgb'),
+	]
+	prj = qp.QgisProject.load(write(tmp_path, project(''.join(treeLayer(i) for i in ('pts', 'byid', 'folder', 'remote')), layers)))
+	pts, byid, folder, remote = prj.layers
+	assert folder.kind == qp.OGR and folder.supported and folder.path == str(dataDir) and folder.ogr['layer'] == 'roads'
+	assert remote.kind == qp.UNSUPPORTED and 'Remote' in remote.reason
+	assert pts.supported and pts.ogr == {'layer': 'pois', 'where': '"kind" = \'shop\'', 'geometryType': 'Point'}
+	assert byid.supported and byid.ogr == {'layer': 2, 'where': None, 'geometryType': None}
 
 
 def test_xyz_variants(tmp_path):

@@ -39,10 +39,10 @@ RASTER = 'RASTER'
 ASC = 'ASC'
 POINTCLOUD = 'POINTCLOUD'
 XYZ = 'XYZ'
-GPKG = 'GPKG'
+OGR = 'OGR' #other vector formats read by GDAL (GeoPackage, KML, MapInfo...)
 UNSUPPORTED = 'UNSUPPORTED'
 
-SUPPORTED_KINDS = {SHP, GEOJSON, RASTER, ASC, POINTCLOUD, XYZ}
+SUPPORTED_KINDS = {SHP, GEOJSON, RASTER, ASC, POINTCLOUD, XYZ, OGR}
 
 RASTER_EXTENSIONS = {'.tif', '.tiff', '.geotiff', '.jp2', '.png', '.jpg', '.jpeg', '.bmp'}
 POINTCLOUD_EXTENSIONS = {'.las', '.laz'}
@@ -64,6 +64,7 @@ class Layer():
 		self.datasource = ''
 		self.path = None #resolved absolute file path for local file layers
 		self.subset = None #part of the datasource after '|', e.g. layername=roads
+		self.ogr = None #OGR options of the datasource: dict with layer, where, geometryType
 		self.crs = None #authid, e.g. EPSG:2154
 		self.crsName = None
 		self.geometry = None #Point, Line, Polygon for vector layers
@@ -159,6 +160,8 @@ class QgisProject():
 			layer.path = path
 		if layer.provider == 'wms':
 			layer.xyz = _readXYZ(layer.datasource)
+		if layer.provider == 'ogr':
+			layer.ogr = _readOgrOptions(layer.subset)
 		layer.kind, layer.reason = _classify(layer)
 		if layer.reason is None and layer.path is not None and not os.path.exists(layer.path):
 			layer.reason = "File not found: " + layer.path
@@ -214,6 +217,21 @@ def _readXYZ(datasource):
 		'referer': params.get('referer') or params.get('http-header:referer') or '',
 	}
 
+def _readOgrOptions(subset):
+	'''OGR options of a QGIS datasource suffix like "layername=roads|subset=type = 'a'|geometrytype=Point"'''
+	options = {'layer': None, 'where': None, 'geometryType': None}
+	for part in (subset or '').split('|'):
+		key, _, value = part.partition('=')
+		if key == 'layername':
+			options['layer'] = value
+		elif key == 'layerid' and value.isdigit() and options['layer'] is None:
+			options['layer'] = int(value)
+		elif key == 'subset':
+			options['where'] = value
+		elif key == 'geometrytype':
+			options['geometryType'] = value
+	return options
+
 def _isValidXYZUrl(url):
 	return url.startswith(('http://', 'https://')) and (('{x}' in url and '{z}' in url and ('{y}' in url or '{-y}' in url)) or '{q}' in url)
 
@@ -244,9 +262,9 @@ def _classify(layer):
 			return SHP, None
 		if ext in ('.geojson', '.json'):
 			return GEOJSON, None
-		if ext == '.gpkg':
-			return GPKG, "GeoPackage layers are not supported yet"
-		return UNSUPPORTED, f"Vector format '{ext or layer.datasource[:40]}' is not supported yet"
+		if layer.datasource.startswith(('/vsi', 'WFS:')) or '://' in layer.datasource.split('|')[0][:12]:
+			return UNSUPPORTED, f"Remote vector datasource '{layer.datasource[:40]}' is not supported"
+		return OGR, None #any GDAL vector format, also folders of shapefiles opened with |layername=
 	if layer.type == 'raster':
 		if layer.provider == 'wms':
 			if layer.xyz is not None:

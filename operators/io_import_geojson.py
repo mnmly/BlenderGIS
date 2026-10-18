@@ -114,15 +114,20 @@ def geomToParts(geom):
 
 
 def listFeatureFields(filepath):
-	"""Collect the union of all feature property keys (preserving first-seen order)
-	along with whether each one only holds numeric values."""
+	"""Fields of a GeoJSON file, see fieldsFromFeatures"""
 	try:
 		data = loadGeojson(filepath)
 	except Exception:
 		log.warning("Unable to read GeoJSON fields", exc_info=True)
 		return {}
+	return fieldsFromFeatures(iterFeatures(data))
+
+
+def fieldsFromFeatures(features):
+	"""Collect the union of all feature property keys (preserving first-seen order)
+	along with whether each one only holds numeric values."""
 	fields = {} #name -> isNumeric
-	for geom, props in iterFeatures(data):
+	for geom, props in features:
 		for k, v in props.items():
 			numeric = isinstance(v, (int, float)) and not isinstance(v, bool)
 			if k not in fields:
@@ -366,13 +371,12 @@ class IMPORTGIS_OT_geojson_props_dialog(Operator):
 		return{'FINISHED'}
 
 
-class IMPORTGIS_OT_geojson(Operator):
-	"""Import from GeoJSON file format (.geojson .json)"""
-
-	bl_idname = "importgis.geojson"
-	bl_description = 'Import GeoJSON (.geojson .json)'
-	bl_label = "Import GeoJSON"
-	bl_options = {"UNDO"}
+class FeaturesImporter():
+	"""
+	Build Blender objects from GeoJSON like features (geometry dict, properties dict).
+	Shared by the GeoJSON and OGR importers: subclasses implement readFeatures().
+	Unregistered mixin: subclassing a registered operator breaks the parent operator.
+	"""
 
 	filepath: StringProperty()
 
@@ -419,25 +423,19 @@ class IMPORTGIS_OT_geojson(Operator):
 
 		bpy.ops.object.select_all(action='DESELECT')
 
-		#Path
-		layerName = os.path.splitext(os.path.basename(self.filepath))[0]
-
-		#Read geojson
-		log.info("Read GeoJSON...")
+		#Read features (geometry, properties) and figure out property fields
+		log.info("Read features...")
 		try:
-			data = loadGeojson(self.filepath)
+			layerName, features = self.readFeatures()
 		except Exception as e:
-			log.error("Unable to read GeoJSON", exc_info=True)
-			self.report({'ERROR'}, "Unable to read GeoJSON, check logs")
+			log.error("Unable to read features", exc_info=True)
+			self.report({'ERROR'}, f"Unable to read {os.path.basename(self.filepath)}, check logs")
 			return {'CANCELLED'}
-
-		#Materialize features (geometry, properties) and figure out property fields
-		features = list(iterFeatures(data))
 		if not features:
-			self.report({'ERROR'}, "No feature found in GeoJSON")
+			self.report({'ERROR'}, "No feature found")
 			return {'CANCELLED'}
 
-		fieldsInfo = listFeatureFields(self.filepath) #name -> isNumeric
+		fieldsInfo = fieldsFromFeatures(features) #name -> isNumeric
 
 		if self.fieldObjName and self.separateObjects:
 			if self.fieldObjName not in fieldsInfo:
@@ -754,6 +752,20 @@ class IMPORTGIS_OT_geojson(Operator):
 
 
 		return {'FINISHED'}
+
+
+class IMPORTGIS_OT_geojson(FeaturesImporter, Operator):
+	"""Import from GeoJSON file format (.geojson .json)"""
+
+	bl_idname = "importgis.geojson"
+	bl_description = 'Import GeoJSON (.geojson .json)'
+	bl_label = "Import GeoJSON"
+	bl_options = {"UNDO"}
+
+	def readFeatures(self):
+		"""Return the layer name and the list of (geometry, properties) of the file"""
+		data = loadGeojson(self.filepath)
+		return os.path.splitext(os.path.basename(self.filepath))[0], list(iterFeatures(data))
 
 
 classes = [

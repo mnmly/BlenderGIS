@@ -53,7 +53,7 @@ KIND_LABELS = {
 	qgis.ASC: ('ASCII grid', 'MESH_GRID'),
 	qgis.POINTCLOUD: ('Point cloud', 'POINTCLOUD_DATA'),
 	qgis.XYZ: ('Web basemap', 'WORLD'),
-	qgis.GPKG: ('GeoPackage', 'CANCEL'),
+	qgis.OGR: ('Vector (GDAL)', 'MESH_DATA'),
 	qgis.UNSUPPORTED: ('Unsupported', 'CANCEL'),
 }
 
@@ -314,6 +314,10 @@ def importLayer(context, layer, project, prefs, options):
 		return bpy.ops.importgis.shapefile(filepath=layer.path, shpCRS=layer.crs)
 	if layer.kind == qgis.GEOJSON:
 		return bpy.ops.importgis.geojson(filepath=layer.path, shpCRS=layer.crs)
+	if layer.kind == qgis.OGR:
+		ogr = layer.ogr
+		return bpy.ops.importgis.ogr(filepath=layer.path, shpCRS=layer.crs, layer='' if ogr['layer'] is None else str(ogr['layer']),
+			where=ogr['where'] or '', geometryType=ogr['geometryType'] or '')
 	ensurePredefCRS(prefs, layer.crs, layer.crsName)
 	if layer.kind == qgis.RASTER:
 		return bpy.ops.importgis.georaster(filepath=layer.path, importMode='PLANE', reprojection=True, rastCRS=layer.crs)
@@ -397,7 +401,7 @@ def organizeObjects(context, objs, layer, project, collections):
 		for coll in list(obj.users_collection):
 			coll.objects.unlink(obj)
 		collection.objects.link(obj)
-		if layer.color is not None and obj.type == 'MESH' and layer.kind in (qgis.SHP, qgis.GEOJSON):
+		if layer.color is not None and obj.type == 'MESH' and layer.kind in (qgis.SHP, qgis.GEOJSON, qgis.OGR):
 			setLayerColor(obj, layer)
 
 def getGroupCollection(context, project, groupPath, collections):
