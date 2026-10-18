@@ -1,18 +1,21 @@
 Blender GIS
 ==========
-Blender minimum version required : v3.4+
+Supported Blender versions : 4.3 to 5.x, installed as an extension (*Edit > Preferences > Get Extensions > Install from Disk*)
 
 Note : Since 2022, the OpenTopography web service requires an API key. Please register to opentopography.org and request a key. This service is still free.
 
 
 [Wiki](https://github.com/domlysz/BlenderGIS/wiki/Home) - [FAQ](https://github.com/domlysz/BlenderGIS/wiki/FAQ) - [Quick start guide](https://github.com/domlysz/BlenderGIS/wiki/Quick-start) - [Flowchart](https://raw.githubusercontent.com/wiki/domlysz/blenderGIS/flowchart.jpg)
 
-### Additional installation for LIDAR support
-**Change the python path accordingly to your own Blender path**
+### Building the extension
+LIDAR support (laspy, lazrs) and pyproj are bundled as wheels, no manual pip install needed. Download them, then build the zip:
 
 ```
-sudo /Applications/Blender.app/Contents/Resources/3.3/python/bin/python3.10 -m pip install laspy pyproj lazrs laszip
+uv run --with pip tools/fetch_wheels.py
+blender --command extension build
 ```
+
+Logs and the default basemaps cache are stored in the extension user folder (`extensions/.user/<repo>/blendergis`), previously `~/.bgis`.
 
 ![las-usage](https://user-images.githubusercontent.com/317202/221855574-bf90814f-0a9a-40a6-8347-d2de6a48e6a5.gif)
 

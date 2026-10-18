@@ -25,8 +25,6 @@ import os
 import sys
 import math
 from mathutils import Vector
-import subprocess
-from pathlib import Path
 import numpy as np#Ship with Blender since 2.70
 
 import logging
@@ -54,18 +52,9 @@ from bpy_extras.io_utils import ImportHelper #helper class defines filename and 
 from bpy.props import StringProperty, BoolProperty, EnumProperty, IntProperty, CollectionProperty, FloatProperty
 from bpy.types import Operator
 
-py_path = Path(sys.prefix) / "bin"
-py_exec = next(py_path.glob("python*"))
-
-try:
-	import laspy
-	import pyproj
-except ImportError:
-	env = os.environ.copy()
-	for dep_name in ("laspy[lazrs]", "pyproj"):
-		res = subprocess.run( [sys.executable, "-m", "pip", "install", dep_name], env=env)
-	import laspy
-	import pyproj
+#Bundled as wheels (see blender_manifest.toml)
+import laspy
+import pyproj
 
 PKG = __package__.rsplit('.', 1)[0]
 
