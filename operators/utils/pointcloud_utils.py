@@ -4,6 +4,9 @@ import numpy as np
 import logging
 log = logging.getLogger(__name__)
 
+#shared geometry nodes group reused by every point cloud import, never edit it for a single object
+#(renamed from 'Point Cloud Visualisation Node' when the material switched to the per point color attribute)
+POINTCLOUD_NODE_GROUP = 'BGIS Point Cloud'
 POINTCLOUD_MATERIAL = 'BGIS_PointCloud'
 POINTCLOUD_RASTER_MATERIAL = 'BGIS_PointCloud_Raster'
 COLOR_ATTRIBUTE = 'Col' #per point color (LAS RGB or baked raster)
@@ -68,11 +71,11 @@ def newRasterPointCloudMaterial(image):
 	_layoutNodes([attr, tex] + _greyFallbackShader(nodes, links, tex.outputs['Color'], tex.outputs['Alpha']))
 	return mat
 
-def setPointCloudMaterial(obj, mat):
+def setPointCloudMaterial(obj, mat, singleUser=True):
 	'''
 	Assign mat to obj. Point clouds imported by BlenderGIS get their material from the
-	Set Material node of their geometry nodes modifier, which is made single user
-	so other point clouds keep their own material
+	Set Material node of their geometry nodes modifier. With singleUser, the shared template
+	group (or any group used elsewhere) is copied first, so other and future point clouds keep their material
 	'''
 	for modifier in obj.modifiers:
 		if modifier.type != 'NODES' or modifier.node_group is None:
@@ -80,7 +83,7 @@ def setPointCloudMaterial(obj, mat):
 		setMatNodes = [node for node in modifier.node_group.nodes if node.type == 'SET_MATERIAL']
 		if not setMatNodes:
 			continue
-		if modifier.node_group.users > 1:
+		if singleUser and (modifier.node_group.name == POINTCLOUD_NODE_GROUP or modifier.node_group.users > 1):
 			modifier.node_group = modifier.node_group.copy()
 			setMatNodes = [node for node in modifier.node_group.nodes if node.type == 'SET_MATERIAL']
 		for node in setMatNodes:

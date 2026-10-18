@@ -37,7 +37,8 @@ from ..core.georaster import GeoRaster
 from .utils import bpyGeoRaster, exportAsMesh
 from .utils import placeObj, adjust3Dview, showTextures, addTexture, getBBOX
 from .utils import rasterExtentToMesh, geoRastUVmap, setDisplacer
-from .utils import getPointCloudMaterial, setPointColors
+from .utils import getPointCloudMaterial, setPointColors, setPointCloudMaterial
+from .utils.pointcloud_utils import POINTCLOUD_NODE_GROUP
 from ..core.utils import BBOX
 
 from ..core import HAS_GDAL
@@ -58,9 +59,6 @@ import laspy
 import pyproj
 
 PKG = __package__.rsplit('.', 1)[0]
-
-#renamed from 'Point Cloud Visualisation Node' when the material switched to the per point color attribute
-POINTCLOUD_NODE_GROUP = 'BGIS Point Cloud'
 
 def crs_to_scene_string(crs):
 	'''Convert a pyproj CRS to the string representation expected by GeoScene.crs (AUTH:CODE, or proj4 as last resort)'''
@@ -413,9 +411,11 @@ class IMPORTLAZ_OT_georaster(Operator, ImportHelper):
 			node_group = bpy.data.node_groups[node_group_name]
 		else:
 			node_group = self.new_pointcloud_geometry_node_group(context, getPointCloudMaterial())
-		
+
 		modifier = obj.modifiers.new(node_group_name, 'NODES')
 		modifier.node_group = node_group
+		# Shared template group: make sure it shows the point colors (heals groups edited by older versions)
+		setPointCloudMaterial(obj, getPointCloudMaterial(), singleUser=False)
 		# Set point size from user preference
 		if hasattr(modifier, "properties"): # Blender 5.x: inputs are no longer IDProperties of the modifier
 			pointSize = getattr(modifier.properties.inputs, "Socket_2", None)
