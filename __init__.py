@@ -37,6 +37,7 @@ TERRAIN_NODES = True
 TERRAIN_RECLASS = True
 BASEMAPS = True
 DROP = True
+COLORIZE_POINTS = True
 EARTH_SPHERE = True
 
 import os, tempfile
@@ -103,6 +104,8 @@ if BASEMAPS:
 	from .operators import view3d_mapviewer
 if DROP:
 	from .operators import object_drop
+if COLORIZE_POINTS:
+	from .operators import object_colorize_points
 if EARTH_SPHERE:
 	from .operators import mesh_earth_sphere
 
@@ -186,6 +189,8 @@ class VIEW3D_MT_menu_gis_object(bpy.types.Menu):
 	def draw(self, context):
 		if DROP:
 			self.layout.operator("object.drop", icon_value=icons_dict["drop"].icon_id, text='Drop')
+		if COLORIZE_POINTS:
+			self.layout.operator("object.colorize_points", icon_value=icons_dict["raster"].icon_id, text='Colorize points from raster')
 
 class VIEW3D_MT_menu_gis_nodes(bpy.types.Menu):
 	bl_label = "Nodes"
@@ -270,6 +275,8 @@ def register():
 		mesh_delaunay_voronoi.register()
 	if DROP:
 		object_drop.register()
+	if COLORIZE_POINTS:
+		object_colorize_points.register()
 	if GET_DEM:
 		io_get_dem.register()
 	if CAM_GEOPHOTO:
@@ -346,6 +353,8 @@ def unregister():
 		mesh_delaunay_voronoi.unregister()
 	if DROP:
 		object_drop.unregister()
+	if COLORIZE_POINTS:
+		object_colorize_points.unregister()
 	if GET_DEM:
 		io_get_dem.unregister()
 	if CAM_GEOPHOTO:

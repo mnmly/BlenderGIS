@@ -37,6 +37,7 @@ from ..core.georaster import GeoRaster
 from .utils import bpyGeoRaster, exportAsMesh
 from .utils import placeObj, adjust3Dview, showTextures, addTexture, getBBOX
 from .utils import rasterExtentToMesh, geoRastUVmap, setDisplacer
+from .utils import getPointCloudMaterial, setPointColors
 from ..core.utils import BBOX
 
 from ..core import HAS_GDAL
@@ -57,6 +58,9 @@ import laspy
 import pyproj
 
 PKG = __package__.rsplit('.', 1)[0]
+
+#renamed from 'Point Cloud Visualisation Node' when the material switched to the per point color attribute
+POINTCLOUD_NODE_GROUP = 'BGIS Point Cloud'
 
 def crs_to_scene_string(crs):
 	'''Convert a pyproj CRS to the string representation expected by GeoScene.crs (AUTH:CODE, or proj4 as last resort)'''
@@ -238,6 +242,7 @@ class IMPORTLAZ_OT_georaster(Operator, ImportHelper):
 				xyz[:, 0], xyz[:, 1] = transformer.transform(xyz[:, 0], xyz[:, 1])
 
 			# Apply clipping if requested
+			mask = None
 			if subBox:
 				mask = ((xyz[:, 0] >= subBox.xmin) & (xyz[:, 0] <= subBox.xmax) &
 						(xyz[:, 1] >= subBox.ymin) & (xyz[:, 1] <= subBox.ymax))
@@ -252,7 +257,8 @@ class IMPORTLAZ_OT_georaster(Operator, ImportHelper):
 				'xyz': xyz,
 				'source_crs': source_crs,
 				'is_fallback': is_fallback,
-				'las': las
+				'las': las,
+				'mask': mask # clipping mask, to keep per point LAS data aligned with xyz
 			})
 
 		# Set scene origin at the center of all point clouds if not already georeferenced
@@ -287,7 +293,8 @@ class IMPORTLAZ_OT_georaster(Operator, ImportHelper):
 			pc.update()
 
 			if self.import_attributes:
-				self.add_point_attributes(pc, obj_data['las'], xyz.shape[0])
+				self.add_point_attributes(pc, obj_data['las'], obj_data['mask'])
+			self.add_point_colors(pc, obj_data['las'], obj_data['mask'])
 
 			# Create and place object - using BlenderGIS placeObj utility
 			obj = placeObj(pc, name)
@@ -365,7 +372,7 @@ class IMPORTLAZ_OT_georaster(Operator, ImportHelper):
 		'synthetic', 'key_point', 'withheld', 'overlap',
 	})
 
-	def add_point_attributes(self, mesh, las_file, point_count):
+	def add_point_attributes(self, mesh, las_file, mask=None):
 		"""Add LAS point attributes to Blender mesh"""
 
 		for attr_name in las_file.point_format.dimension_names:
@@ -380,21 +387,32 @@ class IMPORTLAZ_OT_georaster(Operator, ImportHelper):
 				domain = 'POINT'
 				mesh.attributes.new(name=attr_name, type=attr_type, domain=domain)
 				attr_data = np.asarray(getattr(las_file, attr_name))
-				# Handle potential clipping by only taking the first point_count values
-				if len(attr_data) > point_count:
-					attr_data = attr_data[:point_count]
+				if mask is not None:
+					attr_data = attr_data[mask]
 				mesh.attributes[attr_name].data.foreach_set("value", attr_data)
 			except Exception as e:
 				log.warning(f"Could not add attribute {attr_name}: {e}")
 
+	def add_point_colors(self, mesh, las_file, mask=None):
+		"""Store LAS RGB as the per point color attribute displayed by the point cloud material"""
+		if not {'red', 'green', 'blue'} <= set(las_file.point_format.dimension_names):
+			return
+		rgb = np.column_stack([np.asarray(las_file.red), np.asarray(las_file.green), np.asarray(las_file.blue)]).astype(np.float32)
+		if mask is not None:
+			rgb = rgb[mask]
+		# LAS stores 16 bits colors, but many writers put 8 bits values in it
+		rgb /= 255.0 if rgb.max() <= 255 else 65535.0
+		rgba = np.ones((rgb.shape[0], 4), dtype=np.float32)
+		rgba[:, :3] = rgb
+		setPointColors(mesh, rgba)
+
 	def assign_geometry_node(self, obj, context):
 		"""Assign geometry node group for point cloud visualization"""
-		node_group_name = "Point Cloud Visualisation Node"
+		node_group_name = POINTCLOUD_NODE_GROUP
 		if node_group_name in bpy.data.node_groups:
 			node_group = bpy.data.node_groups[node_group_name]
 		else:
-			material_pointcloud = self.new_pointcloud_material()
-			node_group = self.new_pointcloud_geometry_node_group(context, material_pointcloud)
+			node_group = self.new_pointcloud_geometry_node_group(context, getPointCloudMaterial())
 		
 		modifier = obj.modifiers.new(node_group_name, 'NODES')
 		modifier.node_group = node_group
@@ -417,45 +435,6 @@ class IMPORTLAZ_OT_georaster(Operator, ImportHelper):
 		node.location.x = other.location.x
 		node.location.y = other.location.y - other.height - padding
 
-	def new_pointcloud_material(self):
-		material_id = 'M_PointCloud'
-		mat = bpy.data.materials.get(material_id)
-		if mat != None:
-			return mat
-
-		mat = bpy.data.materials.new(name=material_id)
-		mat.use_nodes = True
-		if mat.node_tree:
-			mat.node_tree.links.clear()
-			mat.node_tree.nodes.clear()
-		
-		nodes = mat.node_tree.nodes
-		links = mat.node_tree.links
-
-		node_attributes = nodes.new('ShaderNodeAttribute')
-		node_texture = nodes.new('ShaderNodeTexImage')
-		shader = nodes.new(type='ShaderNodeBsdfPrincipled')
-		output = nodes.new(type='ShaderNodeOutputMaterial')
-
-		node_attributes.attribute_type = 'GEOMETRY'
-		node_attributes.attribute_name = 'geo_uv_texture'
-
-		links.new(node_attributes.outputs['Vector'], node_texture.inputs['Vector'])
-		links.new(node_texture.outputs['Color'], shader.inputs['Base Color'])
-		links.new(shader.outputs['BSDF'], output.inputs['Surface'])
-
-		# Set locations 
-		padding = 50
-		node_attributes.location.x = 0
-		self.place_node_alongside(node_texture, node_attributes, padding)
-		self.place_node_alongside(shader, node_texture, padding)
-		self.place_node_alongside(output, shader, padding)
-
-		for n in nodes:
-			n.location.y = 0
-
-		return mat
-
 	def node_for_type(self, sources, source_name, type_name):
 		return [source for source in sources if source.type == type_name and source.name == source_name][0]
 
@@ -463,7 +442,7 @@ class IMPORTLAZ_OT_georaster(Operator, ImportHelper):
 		''' Create a new empty node group that can be used
 			in a GeometryNodes modifier.
 		'''
-		node_group = bpy.data.node_groups.new('Point Cloud Visualisation Node', 'GeometryNodeTree')
+		node_group = bpy.data.node_groups.new(POINTCLOUD_NODE_GROUP, 'GeometryNodeTree')
 		nodes = node_group.nodes
 		links = node_group.links
 
