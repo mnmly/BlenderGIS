@@ -26,6 +26,7 @@ import json
 
 from .. import settings
 from ..errors import ApiKeyError
+from ..utils import SSL_CONTEXT
 
 USER_AGENT = settings.user_agent
 
@@ -52,7 +53,7 @@ class MapTilerCoordinates():
 		url = "https://api.maptiler.com"
 		try:
 			rq = Request(url, headers={'User-Agent': USER_AGENT})
-			urlopen(rq, timeout=DEFAULT_TIMEOUT)
+			urlopen(rq, timeout=DEFAULT_TIMEOUT, context=SSL_CONTEXT)
 		except URLError as e:
 			log.error('Cannot ping {} web service, {}'.format(url, e.reason))
 			raise e
@@ -71,7 +72,7 @@ class MapTilerCoordinates():
 
 		try:
 			rq = Request(url, headers={'User-Agent': USER_AGENT})
-			response = urlopen(rq, timeout=REPROJ_TIMEOUT).read().decode('utf8')
+			response = urlopen(rq, timeout=REPROJ_TIMEOUT, context=SSL_CONTEXT).read().decode('utf8')
 		except (URLError, HTTPError) as err:
 			log.error('Http request fails url:{}, code:{}, error:{}'.format(url, err.code, err.reason))
 			raise
@@ -109,7 +110,7 @@ class MapTilerCoordinates():
 
 			try:
 				rq = Request(url, headers={'User-Agent': USER_AGENT})
-				response = urlopen(rq, timeout=REPROJ_TIMEOUT).read().decode('utf8')
+				response = urlopen(rq, timeout=REPROJ_TIMEOUT, context=SSL_CONTEXT).read().decode('utf8')
 			except (URLError, HTTPError) as err:
 				log.error('Http request fails url:{}, code:{}, error:{}'.format(url, err.code, err.reason))
 				raise
@@ -129,7 +130,7 @@ class MapTilerCoordinates():
 		
 		log.debug('Search crs : {}'.format(url))
 		rq = Request(url, headers={'User-Agent': USER_AGENT})
-		response = urlopen(rq, timeout=DEFAULT_TIMEOUT).read().decode('utf8')
+		response = urlopen(rq, timeout=DEFAULT_TIMEOUT, context=SSL_CONTEXT).read().decode('utf8')
 		obj = json.loads(response)
 		
 		log.debug('Search results : {}'.format([(r['id']['code'], r['name']) for r in obj['results']]))
@@ -162,7 +163,7 @@ class TWCC():
 		url = f"http://twcc.fr/en/ws/?fmt=json&x={x1}&y={y1}&in=EPSG:{epsg1}&out=EPSG:{epsg2}"
 
 		rq = Request(url, headers={'User-Agent': USER_AGENT})
-		response = urlopen(rq, timeout=REPROJ_TIMEOUT).read().decode('utf8')
+		response = urlopen(rq, timeout=REPROJ_TIMEOUT, context=SSL_CONTEXT).read().decode('utf8')
 		obj = json.loads(response)
 
 		return (float(obj['point']['x']), float(obj['point']['y']))

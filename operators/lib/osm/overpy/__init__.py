@@ -5,6 +5,7 @@ import sys
 import os
 
 from . import exception
+from .....core.utils import SSL_CONTEXT
 from .__about__ import (
     __author__, __copyright__, __email__, __license__, __summary__, __title__,
     __uri__, __version__
@@ -78,7 +79,7 @@ class Overpass(object):
             req.add_header('User-Agent', self.user_agent)
 
         try:
-            f = urlopen(req, query, timeout=TIMEOUT)
+            f = urlopen(req, query, timeout=TIMEOUT, context=SSL_CONTEXT)
         except HTTPError as e:
             f = e
 

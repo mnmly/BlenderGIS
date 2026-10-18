@@ -6,22 +6,13 @@ import sys, os
 import bpy
 from bpy.props import StringProperty, IntProperty, FloatProperty, BoolProperty, EnumProperty, FloatVectorProperty
 from bpy.types import Operator, Panel, AddonPreferences
-import addon_utils
-
-from . import bl_info
+from .appdata import getAppData
 from .core.proj.reproj import MapTilerCoordinates
 from .core.proj.srs import SRS
 from .core.checkdeps import HAS_GDAL, HAS_PYPROJ, HAS_PIL, HAS_IMGIO
 from .core import settings
 
 PKG = __package__
-
-def getAppData():
-	home = os.path.expanduser('~')
-	loc = os.path.join(home, '.bgis')
-	if not os.path.exists(loc):
-		os.mkdir(loc)
-	return loc
 
 APP_DATA = getAppData()
 
@@ -74,13 +65,8 @@ class BGIS_OT_pref_show(Operator):
 	bl_options = {'INTERNAL'}
 
 	def execute(self, context):
-		addon_utils.modules_refresh()
-		context.preferences.active_section = 'ADDONS'
-		bpy.data.window_managers["WinMan"].addon_search = bl_info['name']
-		#bpy.ops.wm.addon_expand(module=PKG)
-		mod = addon_utils.addons_fake_modules.get(PKG)
-		mod.bl_info['show_expanded'] = True
-		bpy.ops.screen.userpref_show('INVOKE_DEFAULT')
+		#Opens the preferences window on this extension, expanded
+		bpy.ops.preferences.addon_show(module=PKG)
 		return {'FINISHED'}
 
 

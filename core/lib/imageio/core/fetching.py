@@ -26,6 +26,11 @@ class InternetNotAllowedError(IOError):
     pass
 
 
+# BlenderGIS: set to False to honor Blender's "Allow Online Access" preference
+# without mutating the process-wide environment
+ALLOW_INTERNET = True
+
+
 def get_remote_file(fname, directory=None, force_download=False):
     """ Get a the filename for the local version of a file from the web
 
@@ -75,6 +80,9 @@ def get_remote_file(fname, directory=None, force_download=False):
                     break
     
     # If we get here, we're going to try to download the file
+    if not ALLOW_INTERNET:
+        raise InternetNotAllowedError('Will not download resource from the '
+                                      'internet because online access is disabled.')
     if os.getenv('IMAGEIO_NO_INTERNET', '').lower() in ('1', 'true', 'yes'):
         raise InternetNotAllowedError('Will not download resource from the '
                                       'internet because enironment variable '

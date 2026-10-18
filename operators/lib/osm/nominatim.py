@@ -1,4 +1,4 @@
-import os, ssl
+import os
 
 import logging
 log = logging.getLogger(__name__)
@@ -8,6 +8,8 @@ import json
 from urllib.request import urlopen
 from urllib.request import Request
 from urllib.parse import quote_plus
+
+from ....core.utils import SSL_CONTEXT
 
 TIMEOUT = 2
 
@@ -32,7 +34,7 @@ def nominatimQuery(
     if user_agent:
         req.add_header('User-Agent', user_agent)
 
-    response = urlopen(req, timeout=TIMEOUT)
+    response = urlopen(req, timeout=TIMEOUT, context=SSL_CONTEXT)
 
     r = json.loads(response.read().decode('utf-8'))
 

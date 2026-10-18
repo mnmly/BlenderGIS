@@ -17,6 +17,7 @@ from .utils import adjust3Dview, getBBOX, isTopView
 from ..core.proj import SRS, reprojBbox
 
 from ..core import settings
+from ..core.utils import SSL_CONTEXT
 USER_AGENT = settings.user_agent
 
 PKG = __package__.rsplit('.', 1)[0]
@@ -121,7 +122,7 @@ class IMPORTGIS_OT_dem_query(Operator):
 		#Alternatively, we can save on disk, open with GeoRaster class (will use tyf if gdal not available)
 		rq = Request(url, headers={'User-Agent': USER_AGENT})
 		try:
-			with urlopen(rq, timeout=TIMEOUT) as response, open(filePath, 'wb') as outFile:
+			with urlopen(rq, timeout=TIMEOUT, context=SSL_CONTEXT) as response, open(filePath, 'wb') as outFile:
 				data = response.read() # a `bytes` object
 				outFile.write(data) #
 		except (URLError, HTTPError) as err:

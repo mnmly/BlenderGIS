@@ -33,7 +33,7 @@ import sys, time, os
 from .servicesDefs import GRIDS, SOURCES
 from .gpkg import GeoPackage
 from ..georaster import NpImage, GeoRef, BigTiffWriter
-from ..utils import BBOX
+from ..utils import BBOX, SSL_CONTEXT
 from ..proj.reproj import reprojPt, reprojBbox, reprojImg
 from ..proj.ellps import dd2meters, meters2dd
 from ..proj.srs import SRS
@@ -582,7 +582,7 @@ class MapService():
 		try:
 			#make request
 			req = urllib.request.Request(url, None, self.headers)
-			handle = urllib.request.urlopen(req, timeout=TIMEOUT)
+			handle = urllib.request.urlopen(req, timeout=TIMEOUT, context=SSL_CONTEXT)
 			#open image stream
 			data = handle.read()
 			handle.close()

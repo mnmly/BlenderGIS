@@ -19,31 +19,7 @@
 
 import bpy
 
-bl_info = {
-	'name': 'BlenderGIS',
-	'description': 'Various tools for handle geodata',
-	'author': 'domlysz',
-	'license': 'GPL',
-	'deps': '',
-	'version': (2, 2, 14),
-	'blender': (2, 83, 0),
-	'location': 'View3D > Tools > GIS',
-	'warning': '',
-	'wiki_url': 'https://github.com/domlysz/BlenderGIS/wiki',
-	'tracker_url': 'https://github.com/domlysz/BlenderGIS/issues',
-	'link': '',
-	'support': 'COMMUNITY',
-	'category': '3D View'
-	}
-
-class BlenderVersionError(Exception):
-	pass
-
-if bl_info['blender'] > bpy.app.version:
-	raise BlenderVersionError(f"This addon requires Blender >= {bl_info['blender']}")
-if bpy.app.version[0] > 5: #prevent breaking changes on major release
-	raise BlenderVersionError(f"This addon is not tested against Blender {bpy.app.version[0]}.x breaking changes")
-
+#Add-on metadata (version, supported Blender versions, bundled wheels) lives in blender_manifest.toml
 
 #Modules
 CAM_GEOPHOTO = True
@@ -63,16 +39,10 @@ BASEMAPS = True
 DROP = True
 EARTH_SPHERE = True
 
-import os, sys, tempfile
+import os, tempfile
 from datetime import datetime
 
-def getAppData():
-	home = os.path.expanduser('~')
-	loc = os.path.join(home, '.bgis')
-	if not os.path.exists(loc):
-		os.mkdir(loc)
-	return loc
-
+from .appdata import getAppData
 APP_DATA = getAppData()
 
 import logging
@@ -95,45 +65,6 @@ logger = logging.getLogger(__name__)
 logger.addHandler(logHandler)
 logger.setLevel(logging.DEBUG)
 logger.info('###### Starting new Blender session : {}'.format(datetime.now().strftime('%Y-%m-%d %H:%M:%S')))
-
-def _excepthook(exc_type, exc_value, exc_traceback):
-	if 'BlenderGIS' in exc_traceback.tb_frame.f_code.co_filename:
-		logger.error("Uncaught exception", exc_info=(exc_type, exc_value, exc_traceback))
-	sys.__excepthook__(exc_type, exc_value, exc_traceback)
-
-sys.excepthook = _excepthook #warn, this is a global variable, can be overrided by another addon
-
-####
-'''
-Workaround for `sys.excepthook` thread
-https://stackoverflow.com/questions/1643327/sys-excepthook-and-threading
-'''
-import threading
-
-init_original = threading.Thread.__init__
-
-def init(self, *args, **kwargs):
-
-	init_original(self, *args, **kwargs)
-	run_original = self.run
-
-	def run_with_except_hook(*args2, **kwargs2):
-		try:
-			run_original(*args2, **kwargs2)
-		except Exception:
-			sys.excepthook(*sys.exc_info())
-
-	self.run = run_with_except_hook
-
-threading.Thread.__init__ = init
-
-####
-
-
-import ssl
-if (not os.environ.get('PYTHONHTTPSVERIFY', '') and
-	getattr(ssl, '_create_unverified_context', None)):
-	ssl._create_default_https_context = ssl._create_unverified_context
 
 #from .core.checkdeps import HAS_GDAL, HAS_PYPROJ, HAS_PIL, HAS_IMGIO
 from .core.settings import settings
@@ -427,6 +358,10 @@ def unregister():
 		nodes_terrain_analysis_reclassify.unregister()
 	if EARTH_SPHERE:
 		mesh_earth_sphere.unregister()
+
+	#release the log file so the extension user folder can be removed (file locks on Windows)
+	logger.removeHandler(logHandler)
+	logHandler.close()
 
 if __name__ == "__main__":
 	register()
