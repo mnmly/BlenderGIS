@@ -267,7 +267,7 @@ class BGIS_OT_pointcloud_reset_range(bpy.types.Operator):
 
 
 class BGIS_PT_pointcloud(Panel):
-	bl_category = "View"
+	bl_category = "GIS"
 	bl_label = "Point Cloud"
 	bl_space_type = "VIEW_3D"
 	bl_region_type = "UI"
