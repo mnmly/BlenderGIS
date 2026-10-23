@@ -75,9 +75,10 @@ def resolveCrs(wkt, proj4):
 		return ':'.join(authority) if authority else crs.to_proj4()
 	return None
 
-def loadProject(filepath):
+def loadProject(filepath, reload=False):
+	'''Parsed project, kept between the file dialog and the layers dialog (whose list indexes its layers)'''
 	global _project
-	if _project is None or _project.path != filepath:
+	if reload or _project is None or _project.path != filepath:
 		_project = QgisProject.load(filepath, resolveCrs)
 	return _project
 
@@ -160,7 +161,7 @@ class IMPORTGIS_OT_qgis_file_dialog(Operator, ImportHelper):
 
 	def execute(self, context):
 		try:
-			project = loadProject(self.filepath)
+			project = loadProject(self.filepath, reload=True) #the file may have been edited in QGIS since the last import
 		except QgisProjectError as e:
 			self.report({'ERROR'}, str(e))
 			return {'CANCELLED'}
@@ -220,7 +221,7 @@ class IMPORTGIS_OT_qgis_project(Operator):
 	def execute(self, context):
 		wm = context.window_manager
 		try:
-			project = loadProject(self.filepath)
+			project = loadProject(self.filepath, reload=wm.bgis_qgis_path != self.filepath)
 		except QgisProjectError as e:
 			self.report({'ERROR'}, str(e))
 			return {'CANCELLED'}
