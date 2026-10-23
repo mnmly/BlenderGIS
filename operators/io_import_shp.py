@@ -1,6 +1,7 @@
 # -*- coding:utf-8 -*-
 import os, sys, time
 import bpy
+from .utils.point_markers import addPointMarkers
 from bpy.props import StringProperty, BoolProperty, EnumProperty, IntProperty
 from bpy.types import Operator
 import bmesh
@@ -328,6 +329,11 @@ class IMPORTGIS_OT_shapefile(Operator):
 			name="Separate objects",
 			description="Import to separate objects instead one large object",
 			default=False
+			)
+	pointMarkers: BoolProperty(
+			name="Point markers",
+			description="Show the points of a point layer as spheres (geometry nodes instances, the radius can be changed in the modifier)",
+			default=True
 			)
 
 	@classmethod
@@ -731,6 +737,9 @@ class IMPORTGIS_OT_shapefile(Operator):
 
 		t = perf_clock() - t0
 		log.info('Build in %f seconds' % t)
+
+		if self.pointMarkers:
+			addPointMarkers(context.selected_objects) #skips layers with edges: lines, polygons, extruded points
 
 		#Adjust grid size
 		if prefs.adjust3Dview:

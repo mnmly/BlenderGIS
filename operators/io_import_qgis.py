@@ -38,6 +38,7 @@ from ..core.qgis import QgisProject, QgisProjectError
 from ..core.qgis import project as qgis
 from ..core.basemaps.xyz import registerXYZSource, zoomForResolution, tileCount, fetchXYZ
 from .utils import adjust3Dview, getBBOX, placeObj, addTexture
+from .utils.point_markers import setPointMarkersMaterial
 
 PKG = __package__.rsplit('.', 1)[0]
 
@@ -443,6 +444,7 @@ def setLayerColor(obj, layer):
 		principled.inputs['Base Color'].default_value = layer.color
 	obj.data.materials.append(mat)
 	obj.color = layer.color
+	setPointMarkersMaterial(obj, mat)
 
 
 classes = [BGIS_PG_qgis_layer, BGIS_UL_qgis_layers, IMPORTGIS_OT_qgis_select, IMPORTGIS_OT_qgis_file_dialog, IMPORTGIS_OT_qgis_project]

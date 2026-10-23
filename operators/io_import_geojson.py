@@ -1,6 +1,7 @@
 # -*- coding:utf-8 -*-
 import os, sys, json, time
 import bpy
+from .utils.point_markers import addPointMarkers
 from bpy.props import StringProperty, BoolProperty, EnumProperty, IntProperty
 from bpy.types import Operator
 import bmesh
@@ -402,6 +403,11 @@ class FeaturesImporter():
 			description="Import to separate objects instead one large object",
 			default=False
 			)
+	pointMarkers: BoolProperty(
+			name="Point markers",
+			description="Show the points of a point layer as spheres (geometry nodes instances, the radius can be changed in the modifier)",
+			default=True
+			)
 
 	@classmethod
 	def poll(cls, context):
@@ -744,6 +750,9 @@ class FeaturesImporter():
 
 		t = perf_clock() - t0
 		log.info('Build in %f seconds' % t)
+
+		if self.pointMarkers:
+			addPointMarkers(context.selected_objects) #skips layers with edges: lines, polygons, extruded points
 
 		#Adjust grid size
 		if prefs.adjust3Dview:
