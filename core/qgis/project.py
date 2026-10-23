@@ -87,13 +87,13 @@ class Layer():
 
 class QgisProject():
 
-	def __init__(self, path, root):
+	def __init__(self, path, root, resolveCrs=None):
 		self.path = path
+		self._resolveCrs = resolveCrs
 		self.name = os.path.splitext(os.path.basename(path))[0]
 		self.directory = os.path.dirname(os.path.abspath(path))
 		self.version = root.get('version')
-		self.crs = root.findtext('./projectCrs/spatialrefsys/authid') or None
-		self.crsName = root.findtext('./projectCrs/spatialrefsys/description') or None
+		self.crs, self.crsName = self._readCrs(root.find('./projectCrs/spatialrefsys'))
 		self.canvasExtent = _readExtent(root.find('.//mapcanvas/extent'))
 		self._mapLayers = {ml.findtext('id'): ml for ml in root.findall('./projectlayers/maplayer')}
 		self.layers = []
@@ -102,8 +102,12 @@ class QgisProject():
 			self._walkTree(treeRoot, (), True)
 
 	@classmethod
-	def load(cls, path):
-		'''Read a .qgs or .qgz project file'''
+	def load(cls, path, resolveCrs=None):
+		'''
+		Read a .qgs or .qgz project file.
+		resolveCrs(wkt, proj4): optional function returning a CRS string (AUTH:CODE or proj4) for the
+		custom CRS QGIS stores without authid (e.g. compound CRS read from a LAS header), None if unknown
+		'''
 		try:
 			if zipfile.is_zipfile(path):
 				with zipfile.ZipFile(path) as z:
@@ -119,7 +123,7 @@ class QgisProject():
 			raise QgisProjectError(f"Cannot read QGIS project {path}: {e}") from e
 		if root.tag != 'qgis':
 			raise QgisProjectError(f"{path} is not a QGIS project")
-		return cls(path, root)
+		return cls(path, root, resolveCrs)
 
 	@property
 	def canvasCenter(self):
@@ -150,8 +154,7 @@ class QgisProject():
 		layer.provider = ml.findtext('provider')
 		layer.datasource = ml.findtext('datasource') or ''
 		layer.name = layer.name or ml.findtext('layername')
-		layer.crs = ml.findtext('./srs/spatialrefsys/authid') or None
-		layer.crsName = ml.findtext('./srs/spatialrefsys/description') or None
+		layer.crs, layer.crsName = self._readCrs(ml.find('./srs/spatialrefsys'))
 		layer.geometry = ml.get('geometry')
 		layer.extent = _readExtent(ml.find('extent'))
 		layer.color = _readSymbolColor(ml)
@@ -167,6 +170,17 @@ class QgisProject():
 			layer.reason = "File not found: " + layer.path
 		if layer.reason is None and layer.kind in SUPPORTED_KINDS and layer.kind != XYZ and not layer.crs: #XYZ tiles are always web mercator
 			layer.reason = "Layer has no CRS in the project"
+
+	def _readCrs(self, srs):
+		'''(crs, description) of a spatialrefsys node: its authid, else its wkt/proj4 resolved by resolveCrs'''
+		if srs is None:
+			return None, None
+		crs = srs.findtext('authid') or None
+		if crs is None and self._resolveCrs is not None:
+			wkt, proj4 = srs.findtext('wkt') or None, srs.findtext('proj4') or None
+			if wkt or proj4:
+				crs = self._resolveCrs(wkt, proj4)
+		return crs, srs.findtext('description') or None
 
 	def _resolvePath(self, datasource):
 		'''Absolute file path of a local datasource, and its optional '|' suffix (e.g. layername=roads)'''

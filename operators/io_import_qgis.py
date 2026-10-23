@@ -60,10 +60,25 @@ KIND_LABELS = {
 #last parsed project, shared by the file dialog and the layers dialog
 _project = None
 
+def resolveCrs(wkt, proj4):
+	'''AUTH:CODE (or proj4) of a custom QGIS CRS, keeping the horizontal part of a compound CRS'''
+	for definition in (wkt, proj4):
+		if not definition:
+			continue
+		try:
+			crs = pyproj.CRS.from_user_input(definition)
+		except pyproj.exceptions.CRSError:
+			continue
+		if crs.is_compound:
+			crs = crs.sub_crs_list[0]
+		authority = crs.to_authority(min_confidence=70)
+		return ':'.join(authority) if authority else crs.to_proj4()
+	return None
+
 def loadProject(filepath):
 	global _project
 	if _project is None or _project.path != filepath:
-		_project = QgisProject.load(filepath)
+		_project = QgisProject.load(filepath, resolveCrs)
 	return _project
 
 

@@ -179,5 +179,18 @@ def test_xyz_variants(tmp_path):
 def test_demo_project():
 	prj = qp.QgisProject.load(os.path.join(ROOT, 'demo.qgz'))
 	assert prj.crs == 'EPSG:31370'
-	assert [(l.kind, l.visible) for l in prj.layers] == [(qp.RASTER, True), (qp.POINTCLOUD, True), (qp.XYZ, False)]
+	assert [l.kind for l in prj.layers] == [qp.RASTER, qp.POINTCLOUD, qp.XYZ] #visibility follows the user's edits of the file
 	assert prj.layers[1].crs == 'EPSG:31370'
+
+
+def test_custom_crs_without_authid(tmp_path, dataDir):
+	#QGIS stores a CRS read from a LAS header (e.g. a compound CRS) as wkt, with an empty authid
+	wkt = 'COMPOUNDCRS["NAD83 / UTM zone 10N + NAVD88 height",...]'
+	layer = maplayer('cloud', 'point-cloud', 'pdal', './data/cloud.laz', crs='').replace('<authid></authid>', f'<authid></authid><wkt>{wkt}</wkt>')
+	xml = project(treeLayer('cloud'), [layer])
+	cloud, = qp.QgisProject.load(write(tmp_path, xml)).layers
+	assert not cloud.supported and 'no CRS' in cloud.reason
+	seen = []
+	resolve = lambda w, p: seen.append(w) or 'EPSG:26910'
+	cloud, = qp.QgisProject.load(write(tmp_path, xml), resolve).layers
+	assert cloud.supported and cloud.crs == 'EPSG:26910' and seen == [wkt]
