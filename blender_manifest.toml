@@ -1,7 +1,7 @@
 schema_version = "1.0.0"
 
 id = "blendergis"
-version = "2.2.14"
+version = "2.3.0"
 name = "BlenderGIS"
 tagline = "Various tools to handle geographic data"
 maintainer = "domlysz"
@@ -86,4 +86,8 @@ paths_exclude_pattern = [
   "/tests/",
   "/issue_template.md",
   ".DS_Store",
+  "*.qgz", #local QGIS test projects
+  "*.qgs",
+  "/.claude/",
+  ".pytest_cache/",
 ]
