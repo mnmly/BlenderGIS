@@ -207,6 +207,11 @@ class BGIS_PREFS(AddonPreferences):
 	lockOrigin: BoolProperty(name="Lock origin", description='Do not move scene origin when panning map', default=False)
 	lockObj: BoolProperty(name="Lock objects", description='Retain objects geolocation when moving map origin', default=True)
 
+	mapExtentFactor: FloatProperty(
+		name="Load extent",
+		description='Size of the loaded map relative to the 3D view (1 = view size only, 2 = twice the width and height)',
+		default=1.0, min=1.0, max=5.0)
+
 	resamplAlg: EnumProperty(
 		name = "Resampling method",
 		description = "Choose GDAL's resampling method used for reprojection",
@@ -310,6 +315,7 @@ class BGIS_PREFS(AddonPreferences):
 		row.prop(self, "synchOrj")
 		row = box.row()
 		row.prop(self, "resamplAlg")
+		row.prop(self, "mapExtentFactor")
 
 		#IO
 		box = layout.box()

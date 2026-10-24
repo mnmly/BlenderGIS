@@ -55,6 +55,8 @@ from .lib.osm.nominatim import nominatimQuery
 
 PKG = __package__.rsplit('.', 1)[0] #blendergis.basemaps
 
+OFFLINE_MSG = "Online access is disabled: enable it in Preferences > System > Network > Allow Online Access"
+
 ####################
 
 class BaseMap(GeoScene):
@@ -77,6 +79,7 @@ class BaseMap(GeoScene):
 		cacheFolder = prefs.cacheFolder
 
 		self.synchOrj = prefs.synchOrj
+		self.extentFactor = prefs.mapExtentFactor
 
 		#Get resampling algo preference and set the constant
 		MapService.RESAMP_ALG = prefs.resamplAlg
@@ -129,6 +132,7 @@ class BaseMap(GeoScene):
 
 		#Thread attributes
 		self.thread = None
+		self.ready = False #set by the thread when a new mosaic is waiting to be placed
 		#Background image attributes
 		self.img = None #bpy image
 		self.bkg = None #empty image obj
@@ -140,8 +144,11 @@ class BaseMap(GeoScene):
 	def get(self):
 		'''Launch run() function in a new thread'''
 		self.stop()
+		self.ready = False
+		#Read view and scene props here, bpy is not thread safe
+		bbox = self.getBbox()
 		self.srv.start()
-		self.thread = threading.Thread(target=self.run)
+		self.thread = threading.Thread(target=self.run, args=(bbox,))
 		self.thread.start()
 
 	def stop(self):
@@ -150,25 +157,30 @@ class BaseMap(GeoScene):
 			self.srv.stop()
 			self.thread.join()
 
-	def run(self):
-		"""thread method"""
-		self.mosaic = self.request()
-		if self.srv.running and self.mosaic is not None:
+	def run(self, bbox):
+		"""thread method, only downloads and writes the mosaic, placing it is done by update()"""
+		mosaic = self.request(bbox)
+		if self.srv.running and mosaic is not None:
 			#save image
-			self.mosaic.save(self.imgPath)
-		if self.srv.running:
-			#Place background image
-			self.place()
+			mosaic.save(self.imgPath)
+			self.mosaic = mosaic
+			self.ready = True
 		self.srv.stop()
+
+	def update(self):
+		'''Place the last downloaded mosaic, must be called from the main thread'''
+		if self.ready:
+			self.ready = False
+			self.place()
 
 	def moveOrigin(self, dx, dy, useScale=True, updObjLoc=True):
 		'''Move scene origin and update props'''
 		self.moveOriginPrj(dx, dy, useScale, updObjLoc, self.synchOrj) #geoscene function
 
-	def request(self):
-		'''Request map service to build a mosaic of required tiles to cover view3d area'''
+	def getBbox(self):
+		'''Get the bbox to request, in destination tile matrix crs, covering view3d area scaled by extentFactor'''
 		#Get area dimension
-		w, h = self.area.width, self.area.height
+		w, h = self.area.width * self.extentFactor, self.area.height * self.extentFactor
 		#w, h = self.area3d.width, self.area3d.height #WARN return [1,1] !!!!????
 
 		#Get area bbox coords in destination tile matrix crs (map origin is bottom lelf)
@@ -198,6 +210,10 @@ class BaseMap(GeoScene):
 			bbox = reprojBbox(self.crs, self.tm.CRS, bbox)
 		'''
 
+		return bbox
+
+	def request(self, bbox):
+		'''Request map service to build a mosaic of required tiles to cover bbox'''
 		log.debug('Bounding box request : {}'.format(bbox))
 
 		#Stop thread if the request is same as previous
@@ -431,6 +447,7 @@ class VIEW3D_OT_map_start(Operator):
 			layout.prop(addonPrefs, "lockObj")
 			layout.prop(addonPrefs, "lockOrigin")
 			layout.prop(addonPrefs, "synchOrj")
+			layout.prop(addonPrefs, "mapExtentFactor")
 
 		elif self.dialog == 'MAP':
 			layout.prop(self, 'src', text='Source')
@@ -472,6 +489,10 @@ class VIEW3D_OT_map_start(Operator):
 
 		if not context.area.type == 'VIEW_3D':
 			self.report({'WARNING'}, "View3D not found, cannot run operator")
+			return {'CANCELLED'}
+
+		if not bpy.app.online_access:
+			self.report({'ERROR'}, OFFLINE_MSG)
 			return {'CANCELLED'}
 
 		#Update zoom
@@ -630,6 +651,8 @@ class VIEW3D_OT_map_viewer(Operator):
 		if event.type == 'TIMER':
 			#report thread progression
 			self.progress = self.map.srv.report
+			#place the downloaded map
+			self.map.update()
 			return {'PASS_THROUGH'}
 
 
@@ -996,6 +1019,9 @@ class VIEW3D_OT_map_search(bpy.types.Operator):
 		geoscn = GeoScene(context.scene)
 		if geoscn.isBroken:
 			self.report({'ERROR'}, "Scene georef is broken")
+			return {'CANCELLED'}
+		if not bpy.app.online_access:
+			self.report({'ERROR'}, OFFLINE_MSG)
 			return {'CANCELLED'}
 		return context.window_manager.invoke_props_dialog(self)
 
