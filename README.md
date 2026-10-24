@@ -11,21 +11,22 @@ Note : Since 2022, the OpenTopography web service requires an API key. Please re
 
 ## Installation
 
-Requires Blender 4.3 or newer.
+Requires Blender 4.3 or newer. A step by step guide with screenshots, from installing to importing a QGIS project, is in the [tutorial](docs/tutorial.md).
 
 **Recommended: add the BlenderGIS repository**, Blender then installs the right build for your platform and shows updates:
 
-1. In Blender, open *Edit > Preferences > Get Extensions*, click the *⌄* menu at the top right and choose *Repositories*, then *+ > Add Remote Repository*.
-2. Paste this URL and click *Create*:
+1. In Blender, open *Edit > Preferences*, tick *Allow Online Access* in *System > Network*.
+2. In *Get Extensions*, click *Repositories* at the top right, then *+ > Add Remote Repository*.
+3. Paste this URL, tick *Check for Updates on Startup* and click *Create*:
 
    ```
    https://github.com/mnmly/BlenderGIS/releases/latest/download/index.json
    ```
 
-3. Search *BlenderGIS* in *Get Extensions* and click *Install*.
-4. The tools are in the 3D view: the *GIS* menu of the header, and the *GIS* tab of the sidebar (*N*).
+4. Search *BlenderGIS* in *Get Extensions* and click *Install*.
+5. The tools are in the 3D view: the *GIS* menu of the header, and the *GIS* tab of the sidebar (*N*).
 
-New releases then appear in *Get Extensions* with an *Update* button (Blender checks for updates on startup when *Check for Updates on Startup* is enabled for the repository).
+New releases then appear in *Get Extensions* with an *Update* button. **Restart Blender after updating**: until then the previous pyproj and GDAL libraries stay loaded and reprojections fail.
 
 **Or install a zip by hand:** download the zip for your platform from the [latest release](https://github.com/mnmly/BlenderGIS/releases/latest):
 
@@ -43,7 +44,7 @@ Notes :
 - Switching from a zip installed by hand to the repository: uninstall BlenderGIS first, restart Blender, then install it from the repository.
 - The zip contains everything needed (laspy, lazrs, pyproj, Pillow, pyogrio with GDAL): no pip install or system GDAL.
 - Web features (basemaps, OpenStreetMap, SRTM, XYZ layers of QGIS projects) and the repository need *Allow Online Access* in *Preferences > System > Network*.
-- On Windows, restart Blender after updating or disabling the extension, before enabling it again.
+- Restart Blender after updating, or after disabling the extension before enabling it again (all platforms).
 
 ## What's new in this fork
 
