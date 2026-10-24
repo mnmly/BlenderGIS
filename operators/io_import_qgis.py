@@ -24,19 +24,23 @@
 import os
 import re
 import json
+import math
+import threading
 import logging
 log = logging.getLogger(__name__)
 
 import bpy
+import bpy.utils.previews
+import numpy as np
 import pyproj #bundled as wheel (see blender_manifest.toml)
 from bpy_extras.io_utils import ImportHelper
-from bpy.props import StringProperty, BoolProperty, IntProperty, FloatProperty, EnumProperty, CollectionProperty
+from bpy.props import StringProperty, BoolProperty, IntProperty, FloatProperty, FloatVectorProperty, EnumProperty, CollectionProperty
 from bpy.types import Operator, PropertyGroup, UIList
 
 from ..geoscene import GeoScene
 from ..core.qgis import QgisProject, QgisProjectError
 from ..core.qgis import project as qgis
-from ..core.basemaps.xyz import registerXYZSource, zoomForResolution, tileCount, fetchXYZ
+from ..core.basemaps.xyz import registerXYZSource, zoomForResolution, tileCount, fetchXYZ, WM_RES0
 from .utils import adjust3Dview, getBBOX, placeObj, addTexture
 from .utils.point_markers import setPointMarkersMaterial
 
@@ -60,6 +64,12 @@ KIND_LABELS = {
 
 #last parsed project, shared by the file dialog and the layers dialog
 _project = None
+
+REGION_MODES = [
+	('CANVAS', 'QGIS map view', "Extent of the map view saved in the QGIS project"),
+	('LAYERS', 'Selected layers', "Extent of the selected layers, basemaps excluded"),
+	('CUSTOM', 'Custom', "Bounds typed in the project CRS"),
+]
 
 def resolveCrs(wkt, proj4):
 	'''AUTH:CODE (or proj4) of a custom QGIS CRS, keeping the horizontal part of a compound CRS'''
@@ -111,6 +121,191 @@ def fillLayerList(wm, project):
 			item.supported = False
 			item.reason = "Enable Allow Online Access (Preferences > System) to download basemaps"
 		item.selected = layer.supported and layer.visible
+	if project.canvasExtent is not None:
+		wm.bgis_qgis_region = 'CANVAS'
+		applyRegionPreset(wm, project)
+
+
+def selectedLayers(wm, project):
+	return [project.layers[item.order] for item in wm.bgis_qgis_layers if item.selected and item.supported]
+
+def layersExtent(layers, crs):
+	'''Union of the layers extents, in crs (None if no layer has an extent)'''
+	boxes = []
+	for layer in layers:
+		if layer.kind == qgis.XYZ or layer.extent is None or not layer.crs:
+			continue
+		try:
+			boxes.append(pyproj.Transformer.from_crs(layer.crs, crs, always_xy=True).transform_bounds(*layer.extent, densify_pts=21))
+		except pyproj.exceptions.ProjError:
+			log.warning(f"Cannot reproject the extent of QGIS layer {layer.name}")
+	if not boxes:
+		return None
+	return (min(b[0] for b in boxes), min(b[1] for b in boxes), max(b[2] for b in boxes), max(b[3] for b in boxes))
+
+def presetExtent(wm, project, mode):
+	if mode == 'CANVAS':
+		return project.canvasExtent
+	if mode == 'LAYERS':
+		return layersExtent(selectedLayers(wm, project), project.crs)
+	return None
+
+#set while a preset writes the region bounds, so that only edits by the user switch to custom
+_syncingRegion = False
+
+def applyRegionPreset(wm, project):
+	'''Copy the extent of the selected preset to the region bounds'''
+	global _syncingRegion
+	extent = presetExtent(wm, project, wm.bgis_qgis_region) if project is not None else None
+	if extent is None:
+		return
+	_syncingRegion = True
+	try:
+		wm.bgis_qgis_region_bbox = extent
+	finally:
+		_syncingRegion = False
+
+def updateRegionMode(wm, context):
+	applyRegionPreset(wm, _project)
+
+def updateRegionBbox(wm, context):
+	if not _syncingRegion and wm.bgis_qgis_region != 'CUSTOM':
+		wm.bgis_qgis_region = 'CUSTOM'
+
+def basemapPlan(extent, crs, xyz, basemapSize):
+	'''Web mercator bbox, zoom level and number of tiles of an XYZ layer download covering extent (in crs)'''
+	bbox = pyproj.Transformer.from_crs(crs, 'EPSG:3857', always_xy=True).transform_bounds(*extent, densify_pts=21)
+	zoom = zoomForResolution(max(bbox[2] - bbox[0], bbox[3] - bbox[1]) / basemapSize, xyz['zmin'], xyz['zmax'])
+	return bbox, zoom, tileCount(bbox, zoom)
+
+def groundSize(extent, crs):
+	'''Width and height in meters of extent (in crs), measured through its center'''
+	xmin, ymin, xmax, ymax = pyproj.Transformer.from_crs(crs, 'EPSG:4326', always_xy=True).transform_bounds(*extent, densify_pts=21)
+	geod = pyproj.Geod(ellps='WGS84')
+	cx, cy = (xmin + xmax) / 2, (ymin + ymax) / 2
+	return geod.inv(xmin, cy, xmax, cy)[2], geod.inv(cx, ymin, cx, ymax)[2]
+
+def formatDistance(meters):
+	return f"{meters / 1000:.2f} km" if meters >= 1000 else f"{meters:.0f} m"
+
+
+#Region preview: a small basemap mosaic around the region, downloaded in a thread,
+#with the download area and the region drawn over it at each dialog redraw
+PREVIEW_SIZE = 512 #pixels, largest side of the preview mosaic
+PREVIEW_MARGIN = 0.25
+PREVIEW_SCALE = 20 #size of the preview in the dialog, in UI units #context around the map view / layers / region, relative to their size
+_preview = {'pcoll': None, 'base': None, 'baseBbox': None, 'baseKey': None, 'fetching': None, 'error': None, 'drawnKey': None}
+
+def tileAligned(bbox, zoom):
+	'''Web mercator bbox snapped outward to the tiles of a zoom level, the area actually downloaded'''
+	size = 256 * WM_RES0 / 2 ** zoom
+	xmin, ymin, xmax, ymax = bbox
+	return (math.floor(xmin / size) * size, math.floor(ymin / size) * size,
+		(math.floor(xmax / size) + 1) * size, (math.floor(ymax / size) + 1) * size)
+
+def regionOutline(extent, crs, nbPts=16):
+	'''Region rectangle (in crs) as a closed web mercator polyline, edges densified (they can curve once reprojected)'''
+	xmin, ymin, xmax, ymax = extent
+	ts = [i / nbPts for i in range(nbPts)]
+	pts = [(xmin + (xmax - xmin) * t, ymin) for t in ts] + [(xmax, ymin + (ymax - ymin) * t) for t in ts] \
+		+ [(xmax - (xmax - xmin) * t, ymax) for t in ts] + [(xmin, ymax - (ymax - ymin) * t) for t in ts]
+	pts.append(pts[0])
+	xs, ys = pyproj.Transformer.from_crs(crs, 'EPSG:3857', always_xy=True).transform([p[0] for p in pts], [p[1] for p in pts])
+	return list(zip(xs, ys))
+
+def previewContext(wm, project, extent):
+	'''Web mercator bbox shown by the preview: map view, selected layers and region, with a margin'''
+	boxes = [b for b in (project.canvasExtent, layersExtent(selectedLayers(wm, project), project.crs), extent) if b is not None]
+	toWM = pyproj.Transformer.from_crs(project.crs, 'EPSG:3857', always_xy=True)
+	boxes = [toWM.transform_bounds(*b, densify_pts=21) for b in boxes]
+	xmin, ymin = min(b[0] for b in boxes), min(b[1] for b in boxes)
+	xmax, ymax = max(b[2] for b in boxes), max(b[3] for b in boxes)
+	m = max(xmax - xmin, ymax - ymin) * PREVIEW_MARGIN
+	return (xmin - m, ymin - m, xmax + m, ymax + m)
+
+def _fetchPreview(key, srckey, bbox, zoom, cacheFolder):
+	'''Thread: download the preview mosaic, as float RGBA rows bottom up (the layout of preview pixels)'''
+	try:
+		mosaic, nbMissing = fetchXYZ(srckey, bbox, zoom, cacheFolder, retries=0)
+		data = mosaic.data
+		if data.ndim == 2:
+			data = data[:, :, None]
+		if data.shape[2] < 3:
+			data = np.repeat(data[:, :, :1], 3, axis=2)
+		rgba = np.ones(data.shape[:2] + (4,), dtype=np.float32)
+		rgba[:, :, :3] = data[:, :, :3] / 255
+		georefBbox = mosaic.georef.bbox
+		result = rgba[::-1].copy(), (georefBbox.xmin, georefBbox.ymin, georefBbox.xmax, georefBbox.ymax), None
+	except Exception as e:
+		log.warning("Cannot download the basemap region preview", exc_info=True)
+		result = None, None, str(e)
+	if _preview['fetching'] == key: #else a newer request is running
+		_preview['base'], _preview['baseBbox'], _preview['error'] = result
+		_preview['baseKey'] = key if result[0] is not None else None
+		_preview['drawnKey'] = None
+		_preview['fetching'] = None
+
+def requestPreview(wm, project, extent, layer, cacheFolder):
+	'''Start downloading a preview mosaic if the current one does not cover the region'''
+	ctx = previewContext(wm, project, extent)
+	base = _preview['baseBbox']
+	covered = base is not None and _preview['baseKey'] is not None and _preview['baseKey'][0] == layer.xyz['url'] \
+		and base[0] <= ctx[0] and base[1] <= ctx[1] and base[2] >= ctx[2] and base[3] >= ctx[3]
+	if covered or _preview['fetching'] is not None:
+		return
+	zoom = zoomForResolution(max(ctx[2] - ctx[0], ctx[3] - ctx[1]) / PREVIEW_SIZE, layer.xyz['zmin'], layer.xyz['zmax'])
+	key = (layer.xyz['url'], ctx, zoom)
+	if _preview['error'] is not None and _preview.get('lastKey') == key:
+		return #do not retry the same failed request at each redraw
+	srckey = registerXYZSource(layer.xyz['url'], layer.xyz['zmin'], layer.xyz['zmax'], layer.xyz['referer'], layer.name)
+	_preview['fetching'] = key
+	_preview['lastKey'] = key
+	_preview['error'] = None
+	threading.Thread(target=_fetchPreview, args=(key, srckey, ctx, zoom, cacheFolder), daemon=True).start()
+
+def _drawPolyline(img, pts, color, width=2):
+	'''Draw a polyline of pixel coordinates (x right, y up) on an RGBA float image'''
+	h, w = img.shape[:2]
+	for (x0, y0), (x1, y1) in zip(pts[:-1], pts[1:]):
+		n = int(max(abs(x1 - x0), abs(y1 - y0))) + 1
+		xs = np.linspace(x0, x1, n).round().astype(int)
+		ys = np.linspace(y0, y1, n).round().astype(int)
+		for dx in range(-(width // 2), width - width // 2):
+			for dy in range(-(width // 2), width - width // 2):
+				ok = (xs + dx >= 0) & (xs + dx < w) & (ys + dy >= 0) & (ys + dy < h)
+				img[ys[ok] + dy, xs[ok] + dx, :3] = color
+
+def previewIcon(extent, crs, downloadBbox):
+	'''Icon of the preview mosaic with the download area and the region drawn over it (None until downloaded)'''
+	base, bbox = _preview['base'], _preview['baseBbox']
+	if base is None:
+		return None
+	if _preview['pcoll'] is None:
+		_preview['pcoll'] = bpy.utils.previews.new()
+	pcoll = _preview['pcoll']
+	preview = pcoll.get('region') or pcoll.new('region')
+	key = (_preview['baseKey'], extent, downloadBbox)
+	if _preview['drawnKey'] != key:
+		h, w = base.shape[:2]
+		toPx = lambda x, y: ((x - bbox[0]) / (bbox[2] - bbox[0]) * w, (y - bbox[1]) / (bbox[3] - bbox[1]) * h)
+		img = base.copy()
+		#dim what will not be downloaded
+		x0, y0 = toPx(downloadBbox[0], downloadBbox[1])
+		x1, y1 = toPx(downloadBbox[2], downloadBbox[3])
+		inside = np.zeros((h, w), dtype=bool)
+		inside[max(0, int(y0)):max(0, int(math.ceil(y1))), max(0, int(x0)):max(0, int(math.ceil(x1)))] = True
+		img[~inside, :3] *= 0.35
+		_drawPolyline(img, [(x0, y0), (x1, y0), (x1, y1), (x0, y1), (x0, y0)], (1, 1, 1), width=1)
+		_drawPolyline(img, [toPx(x, y) for x, y in regionOutline(extent, crs)], (1, 0.55, 0.1), width=2)
+		preview.image_size = (w, h)
+		preview.image_pixels_float.foreach_set(img.ravel())
+		_preview['drawnKey'] = key
+	return preview.icon_id
+
+def freePreview():
+	if _preview['pcoll'] is not None:
+		bpy.utils.previews.remove(_preview['pcoll'])
+	_preview.update(pcoll=None, base=None, baseBbox=None, baseKey=None, fetching=None, error=None, drawnKey=None)
 
 
 class BGIS_UL_qgis_layers(UIList):
@@ -188,15 +383,25 @@ class IMPORTGIS_OT_qgis_project(Operator):
 
 	basemap_size: IntProperty(
 		name="Basemap size",
-		description="Maximum size in pixels of the basemaps (XYZ tiles) downloaded for the QGIS map view extent",
+		description="Maximum size in pixels of the basemaps (XYZ tiles) downloaded for the region",
 		default=2048, min=256, max=8192
 		)
+
+	basemap_extent: FloatVectorProperty(
+		name="Basemap region",
+		description="Bounds (xmin, ymin, xmax, ymax) in the project CRS of the downloaded basemaps, all zero for the QGIS map view",
+		size=4, options={'HIDDEN'}
+		)
+
+	#set when run from the layers dialog: selected basemaps then open the region dialog before importing
+	ask_region: BoolProperty(options={'HIDDEN', 'SKIP_SAVE'})
 
 	@classmethod
 	def poll(cls, context):
 		return context.mode == 'OBJECT'
 
 	def invoke(self, context, event):
+		self.ask_region = True
 		return context.window_manager.invoke_props_dialog(self, width=560)
 
 	def draw(self, context):
@@ -212,7 +417,6 @@ class IMPORTGIS_OT_qgis_project(Operator):
 			row.operator('importgis.qgis_select', text=text).mode = mode
 		row = layout.row()
 		row.prop(self, 'point_size')
-		row.prop(self, 'basemap_size')
 		geoscn = GeoScene(context.scene)
 		if geoscn.isGeoref:
 			layout.label(text=f"Layers will be reprojected to the scene CRS {geoscn.crs}", icon='INFO')
@@ -228,11 +432,16 @@ class IMPORTGIS_OT_qgis_project(Operator):
 			return {'CANCELLED'}
 		if wm.bgis_qgis_path != project.path:
 			fillLayerList(wm, project) #called without the dialog: visible layers
-		layers = [project.layers[item.order] for item in wm.bgis_qgis_layers if item.selected and item.supported]
+		layers = selectedLayers(wm, project)
 		if not bpy.app.online_access:
 			layers = [layer for layer in layers if layer.kind != qgis.XYZ]
 		if not layers:
 			self.report({'WARNING'}, "No layer selected")
+			return {'CANCELLED'}
+		if self.ask_region and any(layer.kind == qgis.XYZ for layer in layers):
+			#nothing imported yet, the region dialog runs this operator again
+			bpy.ops.importgis.qgis_basemap_region('INVOKE_DEFAULT', filepath=self.filepath,
+				point_size=self.point_size, basemap_size=self.basemap_size)
 			return {'CANCELLED'}
 
 		prefs = context.preferences.addons[PKG].preferences
@@ -300,6 +509,112 @@ class IMPORTGIS_OT_qgis_project(Operator):
 		return {'FINISHED'} if imported else {'CANCELLED'}
 
 
+class IMPORTGIS_OT_qgis_basemap_region(Operator):
+	"""Choose the region of the basemaps downloaded with a QGIS project, then import it"""
+	bl_idname = "importgis.qgis_basemap_region"
+	bl_description = 'Choose the region of the basemaps to download, then import the QGIS project'
+	bl_label = "Basemap region"
+	bl_options = {'INTERNAL', 'UNDO'}
+
+	filepath: StringProperty(subtype='FILE_PATH', options={'HIDDEN'})
+	point_size: FloatProperty(options={'HIDDEN'})
+	basemap_size: IntProperty(
+		name="Basemap size",
+		description="Maximum size in pixels of the basemaps (XYZ tiles) downloaded for the region",
+		default=2048, min=256, max=8192
+		)
+
+	#redraw the dialog when a value changes (live preview of the download)
+	def check(self, context):
+		return True
+
+	def invoke(self, context, event):
+		wm = context.window_manager
+		if _project is None or not _project.crs:
+			self.report({'ERROR'}, "The project has no CRS to define the basemap region in")
+			return {'CANCELLED'}
+		applyRegionPreset(wm, _project) #the layer selection may have changed the layers extent
+		return wm.invoke_props_dialog(self, width=460, confirm_text="Import")
+
+	def region(self, context):
+		'''Region bounds, or None with the reason they cannot be used'''
+		wm = context.window_manager
+		if wm.bgis_qgis_region != 'CUSTOM' and presetExtent(wm, _project, wm.bgis_qgis_region) is None:
+			return None, "No extent found for this preset, type the bounds"
+		xmin, ymin, xmax, ymax = wm.bgis_qgis_region_bbox
+		if xmin >= xmax or ymin >= ymax:
+			return None, "X min / Y min must be lower than X max / Y max"
+		return (xmin, ymin, xmax, ymax), None
+
+	def draw(self, context):
+		layout = self.layout
+		wm = context.window_manager
+		layout.row().prop(wm, 'bgis_qgis_region', expand=True)
+		self.drawPreview(context, layout)
+		col = layout.column(align=True)
+		row = col.row(align=True)
+		row.prop(wm, 'bgis_qgis_region_bbox', index=0, text="X min")
+		row.prop(wm, 'bgis_qgis_region_bbox', index=2, text="X max")
+		row = col.row(align=True)
+		row.prop(wm, 'bgis_qgis_region_bbox', index=1, text="Y min")
+		row.prop(wm, 'bgis_qgis_region_bbox', index=3, text="Y max")
+		layout.label(text=f"Bounds in the project CRS {_project.crs}")
+		layout.prop(self, 'basemap_size')
+
+		box = layout.box()
+		extent, error = self.region(context)
+		if error:
+			box.label(text=error, icon='ERROR')
+			return
+		try:
+			w, h = groundSize(extent, _project.crs)
+			box.label(text=f"Region {formatDistance(w)} × {formatDistance(h)}", icon='SELECT_SET')
+			for layer in selectedLayers(wm, _project):
+				if layer.kind != qgis.XYZ:
+					continue
+				bbox, zoom, nbTiles = basemapPlan(extent, _project.crs, layer.xyz, self.basemap_size)
+				tooMany = nbTiles > MAX_TILES
+				text = f"{layer.name}: zoom {zoom} · {nbTiles} tiles"
+				box.label(text=text + (f" (more than {MAX_TILES})" if tooMany else ""), icon='ERROR' if tooMany else 'WORLD')
+		except pyproj.exceptions.ProjError as e:
+			box.label(text=f"Cannot reproject the region: {e}", icon='ERROR')
+
+	def drawPreview(self, context, layout):
+		box = layout.box()
+		extent, error = self.region(context)
+		xyzLayers = [layer for layer in selectedLayers(context.window_manager, _project) if layer.kind == qgis.XYZ]
+		if error or not xyzLayers:
+			box.label(text="No preview", icon='IMAGE_DATA')
+			return
+		layer = xyzLayers[0]
+		try:
+			prefs = context.preferences.addons[PKG].preferences
+			requestPreview(context.window_manager, _project, extent, layer, prefs.cacheFolder)
+			bbox, zoom, nbTiles = basemapPlan(extent, _project.crs, layer.xyz, self.basemap_size)
+			icon = previewIcon(extent, _project.crs, tileAligned(bbox, zoom))
+		except pyproj.exceptions.ProjError as e:
+			box.label(text=f"Cannot reproject the region: {e}", icon='ERROR')
+			return
+		if icon is None:
+			if _preview['error']:
+				box.label(text=f"Preview unavailable: {_preview['error']}", icon='ERROR')
+			else:
+				box.label(text=f"Loading {layer.name} preview... (move the mouse to refresh)", icon='TIME')
+			return
+		box.template_icon(icon_value=icon, scale=PREVIEW_SCALE)
+		row = box.row()
+		row.label(text="Region", icon='SELECT_SET')
+		row.label(text="Downloaded tiles", icon='MESH_PLANE')
+
+	def execute(self, context):
+		extent, error = self.region(context)
+		if error:
+			self.report({'ERROR'}, error)
+			return {'CANCELLED'}
+		return bpy.ops.importgis.qgis_project('EXEC_DEFAULT', filepath=self.filepath, point_size=self.point_size,
+			basemap_size=self.basemap_size, basemap_extent=extent)
+
+
 def setupScene(geoscn, project):
 	'''Georeference an empty scene like the QGIS project: project CRS, origin at the center of the map view'''
 	if geoscn.isGeoref or not project.crs:
@@ -349,21 +664,20 @@ def importLayer(context, layer, project, prefs, options):
 
 def importXYZ(context, layer, project, prefs, options, gridSize=32):
 	'''
-	Download the XYZ tiles covering the QGIS map view and drape them on a grid mesh.
+	Download the XYZ tiles covering the basemap region (the QGIS map view by default) and drape them on a grid mesh.
 	The tiles are web mercator: the grid vertices are reprojected to the scene CRS with pyproj
 	(no image warping needed), its uv map stays linear in web mercator space.
 	'''
 	if not bpy.app.online_access:
 		raise IOError("Online access is disabled")
-	if project.canvasExtent is None or not project.crs:
+	extent = tuple(options.basemap_extent) if any(options.basemap_extent) else project.canvasExtent
+	if extent is None or not project.crs:
 		raise ValueError("The project has no map view extent to download the basemap for")
 	geoscn = GeoScene(context.scene)
 	xyz = layer.xyz
-	toWM = pyproj.Transformer.from_crs(project.crs, 'EPSG:3857', always_xy=True)
-	bbox = toWM.transform_bounds(*project.canvasExtent, densify_pts=21)
-	zoom = zoomForResolution(max(bbox[2] - bbox[0], bbox[3] - bbox[1]) / options.basemap_size, xyz['zmin'], xyz['zmax'])
-	if tileCount(bbox, zoom) > MAX_TILES:
-		raise ValueError(f"{tileCount(bbox, zoom)} tiles needed at zoom {zoom}, reduce the basemap size or the QGIS map view")
+	bbox, zoom, nbTiles = basemapPlan(extent, project.crs, xyz, options.basemap_size)
+	if nbTiles > MAX_TILES:
+		raise ValueError(f"{nbTiles} tiles needed at zoom {zoom}, reduce the basemap size or the region")
 
 	srckey = registerXYZSource(xyz['url'], xyz['zmin'], xyz['zmax'], xyz['referer'], layer.name)
 	mosaic, nbMissing = fetchXYZ(srckey, bbox, zoom, prefs.cacheFolder)
@@ -447,7 +761,8 @@ def setLayerColor(obj, layer):
 	setPointMarkersMaterial(obj, mat)
 
 
-classes = [BGIS_PG_qgis_layer, BGIS_UL_qgis_layers, IMPORTGIS_OT_qgis_select, IMPORTGIS_OT_qgis_file_dialog, IMPORTGIS_OT_qgis_project]
+classes = [BGIS_PG_qgis_layer, BGIS_UL_qgis_layers, IMPORTGIS_OT_qgis_select, IMPORTGIS_OT_qgis_file_dialog, IMPORTGIS_OT_qgis_project,
+	IMPORTGIS_OT_qgis_basemap_region]
 
 def register():
 	for cls in classes:
@@ -460,10 +775,17 @@ def register():
 	bpy.types.WindowManager.bgis_qgis_layers = CollectionProperty(type=BGIS_PG_qgis_layer)
 	bpy.types.WindowManager.bgis_qgis_layers_index = IntProperty()
 	bpy.types.WindowManager.bgis_qgis_path = StringProperty()
+	bpy.types.WindowManager.bgis_qgis_region = EnumProperty(name="Region", description="Region of the downloaded basemaps",
+		items=REGION_MODES, update=updateRegionMode)
+	bpy.types.WindowManager.bgis_qgis_region_bbox = FloatVectorProperty(name="Region bounds",
+		description="Bounds (xmin, ymin, xmax, ymax) of the basemap region in the project CRS", size=4, precision=6, update=updateRegionBbox)
 
 def unregister():
+	freePreview()
 	del bpy.types.WindowManager.bgis_qgis_layers
 	del bpy.types.WindowManager.bgis_qgis_layers_index
 	del bpy.types.WindowManager.bgis_qgis_path
+	del bpy.types.WindowManager.bgis_qgis_region
+	del bpy.types.WindowManager.bgis_qgis_region_bbox
 	for cls in reversed(classes):
 		bpy.utils.unregister_class(cls)
