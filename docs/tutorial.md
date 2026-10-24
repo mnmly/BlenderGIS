@@ -60,7 +60,7 @@ Choose *GIS > Import > QGIS project (.qgs .qgz)* and select the project file.
 
 ![GIS menu, Import submenu, QGIS project entry](images/tutorial/06-gis-import-menu.png)
 
-The dialog lists the layers of the project. The layers visible in QGIS are selected; unsupported layers are greyed out with the reason. The scene takes the CRS of the project (or reprojects the layers to the scene CRS if it is already georeferenced). Click **OK**.
+The dialog lists the layers of the project. The layers visible in QGIS are selected; unsupported layers are greyed out with the reason. The scene takes the CRS of the project, or the UTM zone of the map view when the project CRS is in degrees, like EPSG:4326 (in an already georeferenced scene, the layers are reprojected to its CRS instead). Click **OK**.
 
 ![Import QGIS project dialog listing a shapefile, a point cloud and a web basemap](images/tutorial/07-select-layers.png)
 
@@ -72,7 +72,7 @@ When web basemap (XYZ) layers are selected, the **Basemap region** dialog opens 
 - **Selected layers**: the extent of the other selected layers, e.g. the LiDAR tile.
 - **Custom**: type the bounds in the project CRS. Editing any bound switches to Custom.
 
-The preview shows the region (orange outline) and the tiles that will be downloaded (bright area: tiles are whole, so it is larger than the region, especially when the basemap has no finer zoom level, like the USGS imagery here which stops at zoom 16). Below, the size of the region and, for each basemap, the zoom level and tile count. *Basemap size* is the maximum size in pixels of the downloaded image: larger means a sharper basemap and more tiles. More than 2000 tiles is refused, reduce the size or the region.
+The preview shows the region (orange outline) and the tiles that will be downloaded (bright area: tiles are whole, so it is larger than the region, especially when the basemap has no finer zoom level, like the USGS imagery here which stops at zoom 16). Below, the size of the region and, for each basemap, the zoom level and tile count. *Basemap size* is the maximum size in pixels of the downloaded image: larger means a sharper basemap and more tiles. After *Import*, the tiles download in the background: Blender stays usable, the status bar shows the progress and *Esc* cancels the import. The layers are imported once the download is done. If the basemap server cannot be reached, the preview and the import say so instead of showing a grey image.
 
 Blender does not redraw dialogs on its own: move the mouse over the dialog to show the preview once it is downloaded.
 
