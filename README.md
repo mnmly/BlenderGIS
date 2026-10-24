@@ -44,6 +44,7 @@ Notes :
 - Switching from a zip installed by hand to the repository: uninstall BlenderGIS first, restart Blender, then install it from the repository.
 - The zip contains everything needed (laspy, lazrs, pyproj, Pillow, pyogrio with GDAL): no pip install or system GDAL.
 - Web features (basemaps, OpenStreetMap, SRTM, XYZ layers of QGIS projects) and the repository need *Allow Online Access* in *Preferences > System > Network*.
+- Basemaps of QGIS projects are saved as images in a *basemaps* folder next to the `.blend` file (copied there when the file is saved): keep it with the `.blend` file.
 - Restart Blender after updating, or after disabling the extension before enabling it again (all platforms).
 
 ## What's new in this fork

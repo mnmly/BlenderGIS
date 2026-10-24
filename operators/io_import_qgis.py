@@ -25,6 +25,8 @@ import os
 import re
 import json
 import math
+import shutil
+import hashlib
 import functools
 import threading
 import logging
@@ -762,6 +764,63 @@ def importLayer(context, layer, project, prefs, options):
 	raise ValueError(f"Unsupported layer kind {layer.kind}")
 
 
+#basemap images are written next to the saved .blend file, or in the cache folder until it is saved
+BASEMAPS_FOLDER = 'basemaps'
+CACHE_BASEMAPS_FOLDER = 'qgis_basemaps'
+
+def basemapFile(prefs, layer, zoom, bounds):
+	'''Path of a basemap image, unique per source, zoom level and area (web mercator bounds)'''
+	key = hashlib.md5(f"{layer.xyz['url']}|{zoom}|{[round(v) for v in bounds]}".encode('utf-8')).hexdigest()[:8]
+	name = f"{re.sub(r'[^A-Za-z0-9_-]+', '_', layer.name)}_z{zoom}_{key}.png"
+	if bpy.data.is_saved:
+		folder = os.path.join(os.path.dirname(bpy.data.filepath), BASEMAPS_FOLDER)
+	else:
+		folder = os.path.join(prefs.cacheFolder, CACHE_BASEMAPS_FOLDER)
+	os.makedirs(folder, exist_ok=True)
+	return os.path.join(folder, name)
+
+def isBasemapImage(img, path):
+	#images of earlier versions are not tagged, they are recognized by their cache folder
+	return img.get('bgis_basemap') or os.path.basename(os.path.dirname(path)) == CACHE_BASEMAPS_FOLDER
+
+@bpy.app.handlers.persistent
+def keepBasemapsWithBlend(filepath, *args):
+	'''
+	Before saving a .blend file, copy its basemap images (and their world files) to the basemaps folder
+	next to it and link them there: the folder of the .blend file can then be moved or shared
+	'''
+	if not filepath:
+		return #startup file
+	folder = os.path.join(os.path.dirname(filepath), BASEMAPS_FOLDER)
+	moved = {}
+	for img in bpy.data.images:
+		if img.library is not None or img.packed_file is not None or img.source != 'FILE':
+			continue
+		path = os.path.normpath(bpy.path.abspath(img.filepath))
+		if not isBasemapImage(img, path):
+			continue
+		dst = os.path.join(folder, os.path.basename(path))
+		if path == os.path.normpath(dst) or not os.path.isfile(path):
+			continue
+		try:
+			os.makedirs(folder, exist_ok=True)
+			for src in (path, os.path.splitext(path)[0] + '.wld'):
+				if os.path.isfile(src):
+					shutil.copy2(src, os.path.join(folder, os.path.basename(src)))
+		except OSError:
+			log.error(f"Cannot copy the basemap {path} next to {filepath}", exc_info=True)
+			continue
+		#a first save makes absolute paths relative, Save As remaps paths relative to the current file
+		img.filepath = bpy.path.relpath(dst) if bpy.data.is_saved else dst
+		img['bgis_basemap'] = True
+		moved[path] = dst
+	for obj in bpy.data.objects: #the raster path read by Colorize, Blender does not remap custom properties
+		rasterPath = obj.get('bgis_raster_path')
+		if rasterPath and os.path.normpath(bpy.path.abspath(rasterPath)) in moved:
+			obj['bgis_raster_path'] = moved[os.path.normpath(bpy.path.abspath(rasterPath))]
+	if moved:
+		log.info(f"{len(moved)} basemap images copied to {folder}")
+
 def importXYZ(context, layer, project, prefs, options, gridSize=32):
 	'''
 	Download the XYZ tiles covering the basemap region (the QGIS map view by default) and drape them on a grid mesh.
@@ -784,16 +843,17 @@ def importXYZ(context, layer, project, prefs, options, gridSize=32):
 	if nbMissing:
 		options.report({'WARNING'}, f"{layer.name}: {nbMissing} tiles could not be downloaded (shown grey), import again to retry")
 
-	#keep the mosaic with its world file next to the tiles cache, the plane image and Colorize read it
-	folder = os.path.join(prefs.cacheFolder, 'qgis_basemaps')
-	os.makedirs(folder, exist_ok=True)
-	path = os.path.join(folder, f"{re.sub(r'[^A-Za-z0-9_-]+', '_', layer.name)}_z{zoom}.png")
+	#the mosaic is saved with its world file: the plane image and Colorize read it
+	extent = mosaic.georef.bbox #tile aligned, a bit larger than the map view
+	path = basemapFile(prefs, layer, zoom, (extent.xmin, extent.ymin, extent.xmax, extent.ymax))
 	mosaic.save(path)
 	img = bpy.data.images.load(path, check_existing=True)
 	img.reload()
+	img['bgis_basemap'] = True
+	if bpy.data.is_saved:
+		img.filepath = bpy.path.relpath(path)
 
 	#grid over the mosaic extent, from web mercator to scene coordinates
-	extent = mosaic.georef.bbox #tile aligned, a bit larger than the map view
 	xmin, ymin, xmax, ymax = extent.xmin, extent.ymin, extent.xmax, extent.ymax
 	steps = [i / gridSize for i in range(gridSize + 1)]
 	wmPts = [(xmin + (xmax - xmin) * u, ymin + (ymax - ymin) * v) for v in steps for u in steps]
@@ -879,11 +939,15 @@ def register():
 		items=REGION_MODES, update=updateRegionMode)
 	bpy.types.WindowManager.bgis_qgis_region_bbox = FloatVectorProperty(name="Region bounds",
 		description="Bounds (xmin, ymin, xmax, ymax) of the basemap region in the project CRS", size=4, precision=6, update=updateRegionBbox)
+	if keepBasemapsWithBlend not in bpy.app.handlers.save_pre:
+		bpy.app.handlers.save_pre.append(keepBasemapsWithBlend)
 
 def unregister():
 	if _download is not None and _download.is_alive():
 		_download.cancel()
 	freePreview()
+	if keepBasemapsWithBlend in bpy.app.handlers.save_pre:
+		bpy.app.handlers.save_pre.remove(keepBasemapsWithBlend)
 	del bpy.types.WindowManager.bgis_qgis_layers
 	del bpy.types.WindowManager.bgis_qgis_layers_index
 	del bpy.types.WindowManager.bgis_qgis_path

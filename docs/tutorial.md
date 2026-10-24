@@ -92,6 +92,10 @@ Select the point cloud and open the **GIS** tab of the sidebar: the *Point Cloud
 
 ![Imported LiDAR point cloud colored by elevation over the satellite basemap, with the GIS sidebar tab](images/tutorial/10-result.jpg)
 
+### Where the basemap images are saved
+
+Each basemap is saved as an image (PNG, with a `.wld` world file) in a **basemaps** folder next to the `.blend` file, and linked from there. Before the `.blend` file is saved for the first time, they are kept in the BlenderGIS cache folder, and copied to the basemaps folder when you save (also on *Save As* to another folder). Keep the basemaps folder with the `.blend` file when moving or sharing a project, or use *File > External Data > Pack Resources* to store the images inside the `.blend` file (*Colorize points from raster* needs them as files: unpack them first).
+
 ---
 
 Example data: [USGS 3DEP](https://www.usgs.gov/3d-elevation-program) LiDAR (ARRA Golden Gate 2010) and [USGS National Map](https://basemap.nationalmap.gov/arcgis/rest/services/USGSImageryOnly/MapServer) orthoimagery, both public domain. To use the same basemap in QGIS, add an *XYZ Tiles* connection with the URL `https://basemap.nationalmap.gov/arcgis/rest/services/USGSImageryOnly/MapServer/tile/{z}/{y}/{x}` and a maximum zoom level of 16.
