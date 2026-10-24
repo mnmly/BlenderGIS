@@ -215,6 +215,9 @@ class VIEW3D_MT_menu_gis(bpy.types.Menu):
 	# Set the menu operators and draw functions
 	def draw(self, context):
 		layout = self.layout
+		if PROJ_STALE:
+			layout.label(text=RESTART_MSG, icon='ERROR')
+			layout.separator()
 		layout.operator("bgis.pref_show", icon='PREFERENCES')
 		layout.separator()
 		layout.menu('VIEW3D_MT_menu_gis_webgeodata', icon="URL")
@@ -241,10 +244,48 @@ VIEW3D_MT_menu_gis_nodes
 
 def add_gis_menu(self, context):
 	if context.mode == 'OBJECT':
-		self.layout.menu('VIEW3D_MT_menu_gis')
+		if PROJ_STALE:
+			row = self.layout.row()
+			row.alert = True
+			row.menu('VIEW3D_MT_menu_gis', text="GIS: restart", icon='ERROR')
+		else:
+			self.layout.menu('VIEW3D_MT_menu_gis')
+
+
+#Reinstalling or re-enabling the extension in a running Blender re-extracts its wheels: the pyproj (and GDAL)
+#already loaded keep using the replaced PROJ database, so projected CRS and reprojections fail until a restart
+RESTART_MSG = "Restart Blender to finish installing BlenderGIS, reprojections fail until then"
+PROJ_STALE = False
+
+def projDatabaseOk():
+	'''Query the PROJ database (an empty answer or an error means its file was replaced under the loaded pyproj)'''
+	try:
+		import pyproj.database
+		return len(pyproj.database.get_authorities()) > 0
+	except ImportError:
+		return True #pyproj unavailable, nothing to check
+	except Exception:
+		return False
+
+def showRestartWarning():
+	wm = bpy.context.window_manager
+	if not wm.windows:
+		return 1.0 #no window yet, retry in a second
+	def draw(self, context):
+		self.layout.label(text=RESTART_MSG)
+	with bpy.context.temp_override(window=wm.windows[0]):
+		wm.popup_menu(draw, title="BlenderGIS", icon='ERROR')
+	return None
 
 
 def register():
+	global PROJ_STALE
+	PROJ_STALE = not projDatabaseOk()
+	if PROJ_STALE:
+		logger.error(RESTART_MSG)
+		if not bpy.app.background:
+			bpy.app.timers.register(showRestartWarning, first_interval=0.5)
+
 	#icons
 	global icons_dict
 	icons_dict = iconsLib.new()
