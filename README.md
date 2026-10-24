@@ -11,23 +11,39 @@ Note : Since 2022, the OpenTopography web service requires an API key. Please re
 
 ## Installation
 
-1. Download the zip for your platform from the [latest release](https://github.com/mnmly/BlenderGIS/releases/latest):
+Requires Blender 4.3 or newer.
 
-   | Platform | File |
-   |---|---|
-   | Windows | `blendergis-<version>-windows_x64.zip` |
-   | macOS, Apple Silicon | `blendergis-<version>-macos_arm64.zip` |
-   | macOS, Intel | `blendergis-<version>-macos_x64.zip` |
-   | Linux | `blendergis-<version>-linux_x64.zip` |
+**Recommended: add the BlenderGIS repository**, Blender then installs the right build for your platform and shows updates:
 
-2. In Blender, open *Edit > Preferences > Get Extensions*, click the *⌄* menu at the top right and choose *Install from Disk...*, then select the zip. Dragging the zip onto the Blender window works too.
-3. The tools are in the 3D view: the *GIS* menu of the header, and the *GIS* tab of the sidebar (*N*).
+1. In Blender, open *Edit > Preferences > Get Extensions*, click the *⌄* menu at the top right and choose *Repositories*, then *+ > Add Remote Repository*.
+2. Paste this URL and click *Create*:
+
+   ```
+   https://github.com/mnmly/BlenderGIS/releases/latest/download/index.json
+   ```
+
+3. Search *BlenderGIS* in *Get Extensions* and click *Install*.
+4. The tools are in the 3D view: the *GIS* menu of the header, and the *GIS* tab of the sidebar (*N*).
+
+New releases then appear in *Get Extensions* with an *Update* button (Blender checks for updates on startup when *Check for Updates on Startup* is enabled for the repository).
+
+**Or install a zip by hand:** download the zip for your platform from the [latest release](https://github.com/mnmly/BlenderGIS/releases/latest):
+
+| Platform | File |
+|---|---|
+| Windows | `blendergis-<version>-windows_x64.zip` |
+| macOS, Apple Silicon | `blendergis-<version>-macos_arm64.zip` |
+| macOS, Intel | `blendergis-<version>-macos_x64.zip` |
+| Linux | `blendergis-<version>-linux_x64.zip` |
+
+then in *Get Extensions*, choose *Install from Disk...* in the *⌄* menu and select the zip (dragging the zip onto the Blender window works too). Zips installed this way are not updated: install the newer zip the same way.
 
 Notes :
 - Do not unzip the file, and do not install it as a legacy add-on (*Add-ons > Install*). If an older BlenderGIS add-on is installed, disable and remove it first.
+- Switching from a zip installed by hand to the repository: uninstall BlenderGIS first, restart Blender, then install it from the repository.
 - The zip contains everything needed (laspy, lazrs, pyproj, Pillow, pyogrio with GDAL): no pip install or system GDAL.
-- Web features (basemaps, OpenStreetMap, SRTM, XYZ layers of QGIS projects) need *Allow Online Access* in *Preferences > System > Network*.
-- To update, install the newer zip the same way. On Windows, restart Blender after updating or disabling the extension, before enabling it again.
+- Web features (basemaps, OpenStreetMap, SRTM, XYZ layers of QGIS projects) and the repository need *Allow Online Access* in *Preferences > System > Network*.
+- On Windows, restart Blender after updating or disabling the extension, before enabling it again.
 
 ## What's new in this fork
 

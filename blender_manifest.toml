@@ -80,6 +80,7 @@ paths_exclude_pattern = [
   "/.gitignore",
   "/.vscode/",
   "*.zip",
+  "/dist/",
   "/docs/",
   "/clients/",
   "/tools/",
