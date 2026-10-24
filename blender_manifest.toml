@@ -4,11 +4,11 @@ id = "blendergis"
 version = "2.3.1"
 name = "BlenderGIS"
 tagline = "Various tools to handle geographic data"
-maintainer = "domlysz"
+maintainer = "Hiroaki Yamane (fork), domlysz (original author)"
 # Supported types: "add-on", "theme"
 type = "add-on"
 
-website = "https://github.com/domlysz/BlenderGIS"
+website = "https://github.com/mnmly/BlenderGIS"
 
 # Tags from the Blender add-on tag list:
 # https://docs.blender.org/manual/en/dev/extensions/tags.html
