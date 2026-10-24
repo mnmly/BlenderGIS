@@ -25,6 +25,7 @@ import os
 import re
 import json
 import math
+import functools
 import threading
 import logging
 log = logging.getLogger(__name__)
@@ -33,6 +34,8 @@ import bpy
 import bpy.utils.previews
 import numpy as np
 import pyproj #bundled as wheel (see blender_manifest.toml)
+import pyproj.aoi
+import pyproj.database
 from bpy_extras.io_utils import ImportHelper
 from bpy.props import StringProperty, BoolProperty, IntProperty, FloatProperty, FloatVectorProperty, EnumProperty, CollectionProperty
 from bpy.types import Operator, PropertyGroup, UIList
@@ -40,7 +43,7 @@ from bpy.types import Operator, PropertyGroup, UIList
 from ..geoscene import GeoScene
 from ..core.qgis import QgisProject, QgisProjectError
 from ..core.qgis import project as qgis
-from ..core.basemaps.xyz import registerXYZSource, zoomForResolution, tileCount, fetchXYZ, WM_RES0
+from ..core.basemaps.xyz import registerXYZSource, zoomForResolution, tileCount, fetchXYZ, XYZPrefetch, WM_RES0
 from .utils import adjust3Dview, getBBOX, placeObj, addTexture
 from .utils.point_markers import setPointMarkersMaterial
 
@@ -50,6 +53,13 @@ PKG = __package__.rsplit('.', 1)[0]
 RASTER_STACK_GAP = 0.05
 #refuse basemaps needing more tiles than this (rate limits of tile servers)
 MAX_TILES = 2000
+#above this many tiles, the region dialog tells how long the basemap download may take
+LARGE_DOWNLOAD = 300
+TILES_PER_SECOND = 20 #measured with 10 download threads, tiles not cached yet
+
+def downloadEstimate(nbTiles):
+	seconds = nbTiles / TILES_PER_SECOND
+	return f"~{round(seconds / 60)} min" if seconds >= 90 else f"~{round(seconds, -1):.0f} s"
 
 KIND_LABELS = {
 	qgis.SHP: ('Shapefile', 'MESH_DATA'),
@@ -192,9 +202,9 @@ def formatDistance(meters):
 #Region preview: a small basemap mosaic around the region, downloaded in a thread,
 #with the download area and the region drawn over it at each dialog redraw
 PREVIEW_SIZE = 512 #pixels, largest side of the preview mosaic
-PREVIEW_MARGIN = 0.25
-PREVIEW_SCALE = 20 #size of the preview in the dialog, in UI units #context around the map view / layers / region, relative to their size
-_preview = {'pcoll': None, 'base': None, 'baseBbox': None, 'baseKey': None, 'fetching': None, 'error': None, 'drawnKey': None}
+PREVIEW_MARGIN = 0.25 #context around the map view / layers / region, relative to their size
+PREVIEW_SCALE = 20 #size of the preview in the dialog, in UI units
+_preview = {'pcoll': None, 'base': None, 'baseBbox': None, 'baseKey': None, 'fetching': None, 'error': None, 'missing': 0, 'drawnKey': None}
 
 def tileAligned(bbox, zoom):
 	'''Web mercator bbox snapped outward to the tiles of a zoom level, the area actually downloaded'''
@@ -235,12 +245,12 @@ def _fetchPreview(key, srckey, bbox, zoom, cacheFolder):
 		rgba = np.ones(data.shape[:2] + (4,), dtype=np.float32)
 		rgba[:, :, :3] = data[:, :, :3] / 255
 		georefBbox = mosaic.georef.bbox
-		result = rgba[::-1].copy(), (georefBbox.xmin, georefBbox.ymin, georefBbox.xmax, georefBbox.ymax), None
+		result = rgba[::-1].copy(), (georefBbox.xmin, georefBbox.ymin, georefBbox.xmax, georefBbox.ymax), None, nbMissing
 	except Exception as e:
 		log.warning("Cannot download the basemap region preview", exc_info=True)
-		result = None, None, str(e)
+		result = None, None, str(e), 0
 	if _preview['fetching'] == key: #else a newer request is running
-		_preview['base'], _preview['baseBbox'], _preview['error'] = result
+		_preview['base'], _preview['baseBbox'], _preview['error'], _preview['missing'] = result
 		_preview['baseKey'] = key if result[0] is not None else None
 		_preview['drawnKey'] = None
 		_preview['fetching'] = None
@@ -305,7 +315,7 @@ def previewIcon(extent, crs, downloadBbox):
 def freePreview():
 	if _preview['pcoll'] is not None:
 		bpy.utils.previews.remove(_preview['pcoll'])
-	_preview.update(pcoll=None, base=None, baseBbox=None, baseKey=None, fetching=None, error=None, drawnKey=None)
+	_preview.update(pcoll=None, base=None, baseBbox=None, baseKey=None, fetching=None, error=None, missing=0, drawnKey=None)
 
 
 class BGIS_UL_qgis_layers(UIList):
@@ -396,6 +406,9 @@ class IMPORTGIS_OT_qgis_project(Operator):
 	#set when run from the layers dialog: selected basemaps then open the region dialog before importing
 	ask_region: BoolProperty(options={'HIDDEN', 'SKIP_SAVE'})
 
+	#set when the basemap tiles were just downloaded in the background: no retry of the missing ones
+	prefetched: BoolProperty(options={'HIDDEN', 'SKIP_SAVE'})
+
 	@classmethod
 	def poll(cls, context):
 		return context.mode == 'OBJECT'
@@ -421,7 +434,11 @@ class IMPORTGIS_OT_qgis_project(Operator):
 		if geoscn.isGeoref:
 			layout.label(text=f"Layers will be reprojected to the scene CRS {geoscn.crs}", icon='INFO')
 		elif project is not None and project.crs:
-			layout.label(text=f"Scene will use the project CRS {project.crs}", icon='INFO')
+			sceneCrs = sceneCrsFor(project.crs, project.canvasCenter)
+			if sceneCrs != project.crs:
+				layout.label(text=f"Scene will use {sceneCrs} (UTM zone of the map view), the project CRS {project.crs} is in degrees", icon='INFO')
+			else:
+				layout.label(text=f"Scene will use the project CRS {project.crs}", icon='INFO')
 
 	def execute(self, context):
 		wm = context.window_manager
@@ -576,6 +593,8 @@ class IMPORTGIS_OT_qgis_basemap_region(Operator):
 				tooMany = nbTiles > MAX_TILES
 				text = f"{layer.name}: zoom {zoom} · {nbTiles} tiles"
 				box.label(text=text + (f" (more than {MAX_TILES})" if tooMany else ""), icon='ERROR' if tooMany else 'WORLD')
+				if not tooMany and nbTiles > LARGE_DOWNLOAD:
+					box.label(text=f"Downloads in the background, up to {downloadEstimate(nbTiles)} (Esc cancels)", icon='TIME')
 		except pyproj.exceptions.ProjError as e:
 			box.label(text=f"Cannot reproject the region: {e}", icon='ERROR')
 
@@ -602,6 +621,8 @@ class IMPORTGIS_OT_qgis_basemap_region(Operator):
 				box.label(text=f"Loading {layer.name} preview... (move the mouse to refresh)", icon='TIME')
 			return
 		box.template_icon(icon_value=icon, scale=PREVIEW_SCALE)
+		if _preview['missing']:
+			box.label(text=f"{_preview['missing']} preview tiles could not be downloaded (shown grey)", icon='ERROR')
 		row = box.row()
 		row.label(text="Region", icon='SELECT_SET')
 		row.label(text="Downloaded tiles", icon='MESH_PLANE')
@@ -611,16 +632,95 @@ class IMPORTGIS_OT_qgis_basemap_region(Operator):
 		if error:
 			self.report({'ERROR'}, error)
 			return {'CANCELLED'}
-		return bpy.ops.importgis.qgis_project('EXEC_DEFAULT', filepath=self.filepath, point_size=self.point_size,
-			basemap_size=self.basemap_size, basemap_extent=extent)
+		args = dict(filepath=self.filepath, point_size=self.point_size, basemap_size=self.basemap_size, basemap_extent=extent)
+		if bpy.app.background or context.window is None:
+			return bpy.ops.importgis.qgis_project('EXEC_DEFAULT', **args)
+		#with a UI, download the basemaps in the background first: Blender stays usable
+		return bpy.ops.importgis.qgis_download('INVOKE_DEFAULT', **args)
 
+
+#background basemap download of the running import (one at a time)
+_download = None
+
+class IMPORTGIS_OT_qgis_download(Operator):
+	"""Download the basemap tiles of a QGIS project in the background, then import it"""
+	bl_idname = "importgis.qgis_download"
+	bl_label = "Download basemaps"
+	bl_options = {'INTERNAL', 'UNDO'}
+
+	filepath: StringProperty(subtype='FILE_PATH', options={'HIDDEN'})
+	point_size: FloatProperty(options={'HIDDEN'})
+	basemap_size: IntProperty(options={'HIDDEN'})
+	basemap_extent: FloatVectorProperty(size=4, options={'HIDDEN'})
+
+	def invoke(self, context, event):
+		global _download
+		if _download is not None and _download.is_alive():
+			self.report({'ERROR'}, "A basemap download is already running")
+			return {'CANCELLED'}
+		wm = context.window_manager
+		project = loadProject(self.filepath)
+		jobs = []
+		for layer in selectedLayers(wm, project):
+			if layer.kind != qgis.XYZ:
+				continue
+			bbox, zoom, nbTiles = basemapPlan(tuple(self.basemap_extent), project.crs, layer.xyz, self.basemap_size)
+			if nbTiles > MAX_TILES:
+				continue #refused by the import, which reports it
+			srckey = registerXYZSource(layer.xyz['url'], layer.xyz['zmin'], layer.xyz['zmax'], layer.xyz['referer'], layer.name)
+			jobs.append((layer.name, srckey, bbox, zoom))
+		prefs = context.preferences.addons[PKG].preferences
+		_download = XYZPrefetch(jobs, prefs.cacheFolder)
+		_download.start()
+		self._timer = wm.event_timer_add(0.2, window=context.window)
+		wm.modal_handler_add(self)
+		return {'RUNNING_MODAL'}
+
+	def modal(self, context, event):
+		if event.type == 'ESC' and event.value == 'PRESS':
+			_download.cancel()
+			self.finish(context)
+			self.report({'WARNING'}, "QGIS project import cancelled")
+			return {'CANCELLED'}
+		if event.type != 'TIMER':
+			return {'PASS_THROUGH'} #keep Blender usable during the download
+		if _download.is_alive():
+			progress = _download.progress()
+			if progress is not None:
+				name, done, total = progress
+				context.workspace.status_text_set(f"BlenderGIS: downloading {name}, {done} / {total} tiles (Esc to cancel)")
+			return {'PASS_THROUGH'}
+		self.finish(context)
+		return bpy.ops.importgis.qgis_project('EXEC_DEFAULT', filepath=self.filepath, point_size=self.point_size,
+			basemap_size=self.basemap_size, basemap_extent=self.basemap_extent, prefetched=True)
+
+	def finish(self, context):
+		context.window_manager.event_timer_remove(self._timer)
+		context.workspace.status_text_set(None)
+
+
+@functools.lru_cache(maxsize=8)
+def sceneCrsFor(crs, center):
+	'''
+	CRS of an empty scene importing a project in crs: the project CRS, or when it is in degrees
+	(1 scene unit would be 1 degree) the UTM zone of center, the map view center in crs
+	'''
+	try:
+		projectCrs = pyproj.CRS.from_user_input(crs)
+	except pyproj.exceptions.CRSError:
+		return crs
+	if not projectCrs.is_geographic or center is None:
+		return crs
+	lon, lat = pyproj.Transformer.from_crs(projectCrs, 'EPSG:4326', always_xy=True).transform(*center)
+	utm = pyproj.database.query_utm_crs_info(datum_name='WGS 84', area_of_interest=pyproj.aoi.AreaOfInterest(lon, lat, lon, lat))
+	return f"{utm[0].auth_name}:{utm[0].code}" if utm else crs
 
 def setupScene(geoscn, project):
-	'''Georeference an empty scene like the QGIS project: project CRS, origin at the center of the map view'''
+	'''Georeference an empty scene like the QGIS project: project CRS (UTM if in degrees), origin at the center of the map view'''
 	if geoscn.isGeoref or not project.crs:
 		return
 	if not geoscn.hasCRS:
-		geoscn.crs = project.crs
+		geoscn.crs = sceneCrsFor(project.crs, project.canvasCenter)
 	center = project.canvasCenter
 	if center is None:
 		return #the first imported layer will set the origin
@@ -680,7 +780,7 @@ def importXYZ(context, layer, project, prefs, options, gridSize=32):
 		raise ValueError(f"{nbTiles} tiles needed at zoom {zoom}, reduce the basemap size or the region")
 
 	srckey = registerXYZSource(xyz['url'], xyz['zmin'], xyz['zmax'], xyz['referer'], layer.name)
-	mosaic, nbMissing = fetchXYZ(srckey, bbox, zoom, prefs.cacheFolder)
+	mosaic, nbMissing = fetchXYZ(srckey, bbox, zoom, prefs.cacheFolder, retries=0 if options.prefetched else 2)
 	if nbMissing:
 		options.report({'WARNING'}, f"{layer.name}: {nbMissing} tiles could not be downloaded (shown grey), import again to retry")
 
@@ -762,7 +862,7 @@ def setLayerColor(obj, layer):
 
 
 classes = [BGIS_PG_qgis_layer, BGIS_UL_qgis_layers, IMPORTGIS_OT_qgis_select, IMPORTGIS_OT_qgis_file_dialog, IMPORTGIS_OT_qgis_project,
-	IMPORTGIS_OT_qgis_basemap_region]
+	IMPORTGIS_OT_qgis_basemap_region, IMPORTGIS_OT_qgis_download]
 
 def register():
 	for cls in classes:
@@ -781,6 +881,8 @@ def register():
 		description="Bounds (xmin, ymin, xmax, ymax) of the basemap region in the project CRS", size=4, precision=6, update=updateRegionBbox)
 
 def unregister():
+	if _download is not None and _download.is_alive():
+		_download.cancel()
 	freePreview()
 	del bpy.types.WindowManager.bgis_qgis_layers
 	del bpy.types.WindowManager.bgis_qgis_layers_index
