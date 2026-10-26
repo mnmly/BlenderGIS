@@ -11,6 +11,8 @@ Usage (from the repository root, wheels fetched with tools/fetch_wheels.py):
 	uv run tools/release.py --publish --notes notes.md  # also create the GitHub release v<version>
 	uv run tools/release.py --index-only --publish    # add index.json to an already published release
 
+After publishing, the repositories in DOWNSTREAM_REPOS are asked to rebuild their index.
+
 The Blender executable is taken from $BLENDER, else /Applications/Blender.app, else `blender`.
 """
 
@@ -29,6 +31,8 @@ MANIFEST = ROOT / "blender_manifest.toml"
 DIST = ROOT / "dist"
 GITHUB_REPO = "mnmly/BlenderGIS"
 REPO_URL = f"https://github.com/{GITHUB_REPO}/releases/latest/download/index.json"
+# Extension repositories that merge this index into theirs, rebuilt after each publish
+DOWNSTREAM_REPOS = ["mnmly/aa-blender-extensions"]
 
 
 def blenderExecutable():
@@ -116,6 +120,17 @@ def publish(version, files, notes):
 		"--notes-file", notes, *files])
 
 
+def notifyDownstream():
+	'''Trigger a rebuild of the repositories that merge this index, so they offer the release right away'''
+	for repo in DOWNSTREAM_REPOS:
+		result = subprocess.run(["gh", "api", "-X", "POST", f"repos/{repo}/dispatches",
+			"-f", "event_type=upstream-release"], capture_output=True, text=True)
+		if result.returncode == 0:
+			print(f"Notified {repo}")
+		else:
+			print(f"Could not notify {repo} (it rebuilds daily anyway): {result.stderr.strip()}")
+
+
 def main():
 	parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
 	parser.add_argument("--publish", action="store_true", help="upload to the GitHub release v<version> (created if needed)")
@@ -136,6 +151,7 @@ def main():
 	zips, indexPath = generateIndex(blender, version, outDir)
 	if args.publish:
 		publish(version, [indexPath] if args.index_only else [*zips, indexPath], args.notes)
+		notifyDownstream()
 	print(f"\nUsers get updates from the repository URL:\n  {REPO_URL}")
 
 
