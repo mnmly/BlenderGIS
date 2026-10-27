@@ -25,6 +25,7 @@ import bpy
 CAM_GEOPHOTO = True
 CAM_GEOREF = True
 EXPORT_SHP = True
+EXPORT_PLY = True
 GET_DEM = True
 IMPORT_GEORASTER = True
 IMPORT_OSM = True
@@ -82,6 +83,8 @@ if CAM_GEOREF:
 	from .operators import add_camera_georef
 if EXPORT_SHP:
 	from .operators import io_export_shp
+if EXPORT_PLY:
+	from .operators import io_export_ply
 if GET_DEM:
 	from .operators import io_get_dem
 if IMPORT_GEORASTER:
@@ -165,6 +168,8 @@ class VIEW3D_MT_menu_gis_export(bpy.types.Menu):
 	def draw(self, context):
 		if EXPORT_SHP:
 			self.layout.operator('exportgis.shapefile', text="Shapefile (.shp)", icon_value=icons_dict["shp"].icon_id)
+		if EXPORT_PLY:
+			self.layout.operator('exportgis.ply', text="Point cloud (.ply)", icon='OUTLINER_OB_POINTCLOUD')
 
 class VIEW3D_MT_menu_gis_webgeodata(bpy.types.Menu):
 	bl_label = "Web geodata"
@@ -316,6 +321,8 @@ def register():
 		io_import_shp.register()
 	if EXPORT_SHP:
 		io_export_shp.register()
+	if EXPORT_PLY:
+		io_export_ply.register()
 	if IMPORT_OSM:
 		io_import_osm.register()
 	if IMPORT_ASC:
@@ -400,6 +407,8 @@ def unregister():
 		io_import_shp.unregister()
 	if EXPORT_SHP:
 		io_export_shp.unregister()
+	if EXPORT_PLY:
+		io_export_ply.unregister()
 	if IMPORT_OSM:
 		io_import_osm.unregister()
 	if IMPORT_ASC:
