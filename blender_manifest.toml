@@ -1,7 +1,7 @@
 schema_version = "1.0.0"
 
 id = "blendergis"
-version = "2.3.5"
+version = "2.3.6"
 name = "BlenderGIS"
 tagline = "Various tools to handle geographic data"
 maintainer = "Hiroaki Yamane (fork), domlysz (original author)"
