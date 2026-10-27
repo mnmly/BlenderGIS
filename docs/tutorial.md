@@ -99,6 +99,8 @@ With the point cloud selected, the *Clip and Section* panel of the **GIS** tab w
 - **Clip by**: a closed mesh (e.g. a cube placed over a building). The points inside it are removed, or only those are kept with **Keep inside**.
 - **Add section helper**: adds a square empty, parented to the point cloud, through its center. Only the points within **Thickness** of its plane are shown: rotate (`R`) or move (`G`) the empty to sweep a vertical or horizontal section through the cloud.
 
+With several point clouds selected, such as neighbouring LiDAR tiles, the point size and the clip and section settings are set on all of them: pick the same clip mesh or section helper to cut through all the tiles at once.
+
 ### Where the basemap images are saved
 
 Each basemap is saved as an image (PNG, with a `.wld` world file) in a **basemaps** folder next to the `.blend` file, and linked from there. Before the `.blend` file is saved for the first time, they are kept in the BlenderGIS cache folder, and copied to the basemaps folder when you save (also on *Save As* to another folder). Keep the basemaps folder with the `.blend` file when moving or sharing a project, or use *File > External Data > Pack Resources* to store the images inside the `.blend` file (*Colorize points from raster* needs them as files: unpack them first).

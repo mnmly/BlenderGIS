@@ -126,6 +126,7 @@ def setModifierInput(mod, name, value):
 		getattr(mod.properties.inputs, identifier).value = value
 	else:
 		mod[identifier] = value
+	mod.id_data.update_tag() #setting an IDProperty does not update the modifier
 
 def pointFilterModifier(obj):
 	'''Geometry nodes modifier clipping / sectioning the points of obj, or None'''

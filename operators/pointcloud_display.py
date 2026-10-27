@@ -26,13 +26,13 @@ log = logging.getLogger(__name__)
 
 import bpy
 import numpy as np
-from bpy.props import StringProperty, EnumProperty, FloatProperty, PointerProperty
+from bpy.props import StringProperty, EnumProperty, FloatProperty, BoolProperty, PointerProperty
 from bpy.types import PropertyGroup, Panel
 
 from .utils import getPointCloudMaterial, setPointCloudMaterial
 from .utils.pointcloud_utils import POINTCLOUD_NODE_GROUP, COLOR_ATTRIBUTE, UV_ATTRIBUTE, CLIP_OBJECT_INPUT, CLIP_KEEP_INSIDE_INPUT
 from .utils.pointcloud_utils import SECTION_OBJECT_INPUT, SECTION_THICKNESS_INPUT
-from .utils.pointcloud_utils import addPointFilterModifier, pointFilterModifier, groupInputIdentifier, getModifierInput, addSectionHelper
+from .utils.pointcloud_utils import addPointFilterModifier, pointFilterModifier, getModifierInput, setModifierInput, addSectionHelper
 
 ATTRIBUTE_MATERIAL = 'BGIS_PointCloud_Attr'
 NUMERIC_TYPES = {'FLOAT', 'INT', 'INT8', 'BOOLEAN'}
@@ -247,6 +247,43 @@ def updateRange(self, context):
 		applyColorBy(self.id_data)
 
 
+#Point size, clip and section are inputs of the modifiers, not stored here: they are read from the
+#object and written to all the selected point clouds, so several tiles are set at once
+
+def selectedPointClouds(obj):
+	'''obj and the other selected point clouds, the panel settings of obj apply to all of them'''
+	return [obj] + [other for other in bpy.context.selected_objects if other != obj and hasPoints(other)]
+
+def getPointSize(self):
+	mod = pointCloudModifier(self.id_data)
+	return float(getModifierInput(mod, 'Radius') or 0) if mod is not None else 0.0
+
+def setPointSize(self, value):
+	for obj in selectedPointClouds(self.id_data):
+		mod = pointCloudModifier(obj)
+		if mod is not None:
+			setModifierInput(mod, 'Radius', value)
+
+def getFilterInput(obj, name, default):
+	mod = pointFilterModifier(obj)
+	value = getModifierInput(mod, name) if mod is not None else None
+	return default if value is None else value
+
+def setFilterInput(obj, name, value):
+	'''Set a clip or section input of obj and the other selected point clouds, adding their modifier if needed'''
+	for target in selectedPointClouds(obj):
+		setModifierInput(addPointFilterModifier(target), name, value)
+
+def filterObjectProperty(name, label, description):
+	'''Object input as its name, searched in the panel (a pointer property cannot be redirected to the modifiers)'''
+	def getName(self):
+		value = getFilterInput(self.id_data, name, None)
+		return value.name if value is not None else ''
+	def setName(self, value):
+		setFilterInput(self.id_data, name, bpy.data.objects.get(value) if value else None)
+	return StringProperty(name=label, description=description, get=getName, set=setName)
+
+
 class BGIS_PG_pointcloud(PropertyGroup):
 	#the selected source is stored as a string, the enum index of dynamic items is not stable
 	colorByValue: StringProperty(default='RGB')
@@ -259,6 +296,18 @@ class BGIS_PG_pointcloud(PropertyGroup):
 		update=updateRange
 		)
 	rasterMaterial: PointerProperty(type=bpy.types.Material, description="Material of the raster projected with Colorize points from raster")
+	pointSize: FloatProperty(name="Point size", description="Radius of the points, set on all the selected point clouds",
+		min=0, subtype='DISTANCE', get=getPointSize, set=setPointSize)
+	clipObject: filterObjectProperty(CLIP_OBJECT_INPUT, "Clip by",
+		"Closed mesh removing the points inside it, set on all the selected point clouds")
+	keepInside: BoolProperty(name="Keep inside", description="Keep only the points inside the clip mesh",
+		get=lambda self: bool(getFilterInput(self.id_data, CLIP_KEEP_INSIDE_INPUT, False)),
+		set=lambda self, value: setFilterInput(self.id_data, CLIP_KEEP_INSIDE_INPUT, value))
+	sectionObject: filterObjectProperty(SECTION_OBJECT_INPUT, "Section by",
+		"Object whose XY plane shows a section of the points, set on all the selected point clouds")
+	sectionThickness: FloatProperty(name="Thickness", description="Thickness of the section slab", min=0, subtype='DISTANCE',
+		get=lambda self: float(getFilterInput(self.id_data, SECTION_THICKNESS_INPUT, 1.0)),
+		set=lambda self, value: setFilterInput(self.id_data, SECTION_THICKNESS_INPUT, value))
 
 
 class BGIS_OT_pointcloud_reset_range(bpy.types.Operator):
@@ -328,17 +377,10 @@ class BGIS_OT_add_section_helper(bpy.types.Operator):
 		return {'FINISHED'}
 
 
-def drawModifierInput(layout, mod, name, text):
-	'''Draw the value of a geometry nodes group input on the modifier'''
-	identifier = groupInputIdentifier(mod.node_group, name)
-	if identifier is None:
-		return
-	if hasattr(mod, "properties"): # Blender 5.x
-		socket = getattr(mod.properties.inputs, identifier, None)
-		if socket is not None:
-			layout.prop(socket, 'value', text=text)
-	elif identifier in mod:
-		layout.prop(mod, '["{}"]'.format(identifier), text=text)
+def drawSelectedCount(layout, obj):
+	count = len(selectedPointClouds(obj))
+	if count > 1:
+		layout.label(text=f"Applies to {count} selected point clouds", icon='INFO')
 
 
 class BGIS_PT_pointcloud(Panel):
@@ -363,9 +405,8 @@ class BGIS_PT_pointcloud(Panel):
 			row.prop(settings, 'rangeMax')
 			row.operator('bgis.pointcloud_reset_range', text='', icon='FILE_REFRESH')
 			layout.prop(settings, 'ramp')
-		#inputs of the point cloud geometry nodes group
-		mod = pointCloudModifier(obj)
-		drawModifierInput(layout, mod, 'Radius', "Point size")
+		layout.prop(settings, 'pointSize')
+		drawSelectedCount(layout, obj)
 		layout.operator('object.colorize_points', icon='IMAGE_DATA')
 
 
@@ -384,15 +425,16 @@ class BGIS_PT_point_filter(Panel):
 		target = pointFilterTarget(context.active_object)
 		if target != context.active_object:
 			layout.label(text=target.name, icon='OUTLINER_OB_POINTCLOUD')
-		mod = pointFilterModifier(target)
-		if mod is None:
+		if pointFilterModifier(target) is None:
 			layout.operator('bgis.add_point_filter', icon='MOD_BOOLEAN')
 			layout.operator('bgis.add_section_helper', icon='EMPTY_DATA')
 			return
-		drawModifierInput(layout, mod, CLIP_OBJECT_INPUT, "Clip by")
-		drawModifierInput(layout, mod, CLIP_KEEP_INSIDE_INPUT, "Keep inside")
-		drawModifierInput(layout, mod, SECTION_OBJECT_INPUT, "Section by")
-		drawModifierInput(layout, mod, SECTION_THICKNESS_INPUT, "Thickness")
+		settings = target.bgis_pointcloud
+		layout.prop_search(settings, 'clipObject', bpy.data, 'objects', icon='OBJECT_DATA')
+		layout.prop(settings, 'keepInside')
+		layout.prop_search(settings, 'sectionObject', bpy.data, 'objects', icon='OBJECT_DATA')
+		layout.prop(settings, 'sectionThickness')
+		drawSelectedCount(layout, target)
 		layout.operator('bgis.add_section_helper', icon='EMPTY_DATA')
 
 
