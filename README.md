@@ -53,6 +53,8 @@ Notes :
 
 **Point Cloud panel :** in the *GIS* tab of the sidebar, choose what colors the points: RGB, elevation, intensity, classification (ASPRS palette) or any other attribute, with a color ramp and value range. Point size is set here too.
 
+**Clip and Section panel :** for any point cloud (BlenderGIS imports, PLY or gaussian splat meshes made of vertices, Blender point cloud objects), *Add clip and section* adds a modifier first in the stack. *Clip by* removes the points inside a closed mesh (or keeps only them with *Keep inside*), *Section by* shows only the points within *Thickness* of an object's XY plane. *Add section helper* adds an empty parented to the point cloud that drives the section: rotate or move it to sweep the section through the cloud.
+
 **Colorize points from a raster :** *GIS > Object > Colorize points from raster* (also in the Point Cloud panel), from a raster already in the scene (e.g. an orthophoto layer of a QGIS project) or a GeoTIFF file. *Live* projects the image through the material, *Bake* copies the colors into the points.
 
 **QGIS project import (.qgs / .qgz) :** *GIS > Import > QGIS project (.qgs .qgz)*. The project's layer tree is listed with what can be imported; tick the layers to bring in.

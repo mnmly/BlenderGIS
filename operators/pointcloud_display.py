@@ -30,7 +30,9 @@ from bpy.props import StringProperty, EnumProperty, FloatProperty, PointerProper
 from bpy.types import PropertyGroup, Panel
 
 from .utils import getPointCloudMaterial, setPointCloudMaterial
-from .utils.pointcloud_utils import POINTCLOUD_NODE_GROUP, COLOR_ATTRIBUTE, UV_ATTRIBUTE
+from .utils.pointcloud_utils import POINTCLOUD_NODE_GROUP, COLOR_ATTRIBUTE, UV_ATTRIBUTE, CLIP_OBJECT_INPUT, CLIP_KEEP_INSIDE_INPUT
+from .utils.pointcloud_utils import SECTION_OBJECT_INPUT, SECTION_THICKNESS_INPUT
+from .utils.pointcloud_utils import addPointFilterModifier, pointFilterModifier, groupInputIdentifier, getModifierInput, addSectionHelper
 
 ATTRIBUTE_MATERIAL = 'BGIS_PointCloud_Attr'
 NUMERIC_TYPES = {'FLOAT', 'INT', 'INT8', 'BOOLEAN'}
@@ -74,11 +76,16 @@ def srgbToLinear(c):
 	c = np.asarray(c, dtype=np.float64)
 	return np.where(c <= 0.04045, c / 12.92, ((c + 0.055) / 1.055) ** 2.4)
 
+def pointCloudModifier(obj):
+	'''Geometry nodes modifier displaying a point cloud imported by BlenderGIS, or None'''
+	if obj is None or obj.type != 'MESH':
+		return None
+	return next((mod for mod in obj.modifiers
+		if mod.type == 'NODES' and mod.node_group is not None and mod.node_group.name.startswith(POINTCLOUD_NODE_GROUP)), None)
+
 def isPointCloud(obj):
 	'''Point clouds imported by BlenderGIS are meshes displayed through the point cloud geometry nodes group'''
-	return obj is not None and obj.type == 'MESH' and any(
-		mod.type == 'NODES' and mod.node_group is not None and mod.node_group.name.startswith(POINTCLOUD_NODE_GROUP)
-		for mod in obj.modifiers)
+	return pointCloudModifier(obj) is not None
 
 def numericAttributes(mesh):
 	return [attr.name for attr in mesh.attributes
@@ -266,6 +273,74 @@ class BGIS_OT_pointcloud_reset_range(bpy.types.Operator):
 		return {'FINISHED'}
 
 
+def hasPoints(obj):
+	'''Any point cloud: a point cloud object or a mesh made of vertices only (LAS, PLY, gaussian splats...)'''
+	if obj is None:
+		return False
+	if obj.type == 'POINTCLOUD':
+		return True
+	return obj.type == 'MESH' and (len(obj.data.polygons) == 0 or pointFilterModifier(obj) is not None)
+
+
+def pointFilterTarget(obj):
+	'''Object whose clip and section settings are shown: a point cloud, or the point cloud a section helper drives'''
+	if hasPoints(obj):
+		return obj
+	if obj is not None and obj.type == 'EMPTY' and hasPoints(obj.parent):
+		mod = pointFilterModifier(obj.parent)
+		if mod is not None and getModifierInput(mod, SECTION_OBJECT_INPUT) == obj:
+			return obj.parent
+	return None
+
+
+class BGIS_OT_add_point_filter(bpy.types.Operator):
+	bl_idname = "bgis.add_point_filter"
+	bl_label = "Add clip and section"
+	bl_description = "Add a modifier, first in the stack, to clip the points by a mesh or show a section slab"
+	bl_options = {'REGISTER', 'UNDO', 'INTERNAL'}
+
+	@classmethod
+	def poll(cls, context):
+		return hasPoints(context.active_object)
+
+	def execute(self, context):
+		addPointFilterModifier(context.active_object)
+		return {'FINISHED'}
+
+
+class BGIS_OT_add_section_helper(bpy.types.Operator):
+	bl_idname = "bgis.add_section_helper"
+	bl_label = "Add section helper"
+	bl_description = "Add an empty, parented to the point cloud, whose plane drives the section. Rotate or move it to sweep the section"
+	bl_options = {'REGISTER', 'UNDO', 'INTERNAL'}
+
+	@classmethod
+	def poll(cls, context):
+		return pointFilterTarget(context.active_object) is not None
+
+	def execute(self, context):
+		empty = addSectionHelper(pointFilterTarget(context.active_object))
+		#select the helper so it can be rotated right away, the panel keeps showing its point cloud settings
+		for obj in context.selected_objects:
+			obj.select_set(False)
+		empty.select_set(True)
+		context.view_layer.objects.active = empty
+		return {'FINISHED'}
+
+
+def drawModifierInput(layout, mod, name, text):
+	'''Draw the value of a geometry nodes group input on the modifier'''
+	identifier = groupInputIdentifier(mod.node_group, name)
+	if identifier is None:
+		return
+	if hasattr(mod, "properties"): # Blender 5.x
+		socket = getattr(mod.properties.inputs, identifier, None)
+		if socket is not None:
+			layout.prop(socket, 'value', text=text)
+	elif identifier in mod:
+		layout.prop(mod, '["{}"]'.format(identifier), text=text)
+
+
 class BGIS_PT_pointcloud(Panel):
 	bl_category = "GIS"
 	bl_label = "Point Cloud"
@@ -288,20 +363,40 @@ class BGIS_PT_pointcloud(Panel):
 			row.prop(settings, 'rangeMax')
 			row.operator('bgis.pointcloud_reset_range', text='', icon='FILE_REFRESH')
 			layout.prop(settings, 'ramp')
-		#point size, the radius input of the point cloud geometry nodes group
-		for mod in obj.modifiers:
-			if mod.type == 'NODES' and mod.node_group is not None and mod.node_group.name.startswith(POINTCLOUD_NODE_GROUP):
-				if hasattr(mod, "properties"): # Blender 5.x
-					size = getattr(mod.properties.inputs, "Socket_2", None)
-					if size is not None:
-						layout.prop(size, 'value', text="Point size")
-				elif "Socket_2" in mod:
-					layout.prop(mod, '["Socket_2"]', text="Point size")
-				break
+		#inputs of the point cloud geometry nodes group
+		mod = pointCloudModifier(obj)
+		drawModifierInput(layout, mod, 'Radius', "Point size")
 		layout.operator('object.colorize_points', icon='IMAGE_DATA')
 
 
-classes = [BGIS_PG_pointcloud, BGIS_OT_pointcloud_reset_range, BGIS_PT_pointcloud]
+class BGIS_PT_point_filter(Panel):
+	bl_category = "GIS"
+	bl_label = "Clip and Section"
+	bl_space_type = "VIEW_3D"
+	bl_region_type = "UI"
+
+	@classmethod
+	def poll(cls, context):
+		return pointFilterTarget(context.active_object) is not None
+
+	def draw(self, context):
+		layout = self.layout
+		target = pointFilterTarget(context.active_object)
+		if target != context.active_object:
+			layout.label(text=target.name, icon='OUTLINER_OB_POINTCLOUD')
+		mod = pointFilterModifier(target)
+		if mod is None:
+			layout.operator('bgis.add_point_filter', icon='MOD_BOOLEAN')
+			layout.operator('bgis.add_section_helper', icon='EMPTY_DATA')
+			return
+		drawModifierInput(layout, mod, CLIP_OBJECT_INPUT, "Clip by")
+		drawModifierInput(layout, mod, CLIP_KEEP_INSIDE_INPUT, "Keep inside")
+		drawModifierInput(layout, mod, SECTION_OBJECT_INPUT, "Section by")
+		drawModifierInput(layout, mod, SECTION_THICKNESS_INPUT, "Thickness")
+		layout.operator('bgis.add_section_helper', icon='EMPTY_DATA')
+
+
+classes = [BGIS_PG_pointcloud, BGIS_OT_pointcloud_reset_range, BGIS_OT_add_point_filter, BGIS_OT_add_section_helper, BGIS_PT_pointcloud, BGIS_PT_point_filter]
 
 def register():
 	for cls in classes:
