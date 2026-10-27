@@ -49,7 +49,7 @@ Notes :
 
 ## What's new in this fork
 
-**LiDAR import (.las / .laz) :** *GIS > Import > LIDAR (.las .laz)*. The CRS is read from the file (compound CRS are reduced to their horizontal part) or set by hand, points can be clipped to the bounding box of an object, and RGB is kept.
+**LiDAR import (.las / .laz) :** *GIS > Import > LIDAR (.las .laz)*. The CRS is read from the file (compound CRS are reduced to their horizontal part) or set by hand. Files without a CRS named after an Ordnance Survey grid tile (e.g. Environment Agency `TQ2580_P_8301_20120402_20120416.laz`) whose points lie in that tile use British National Grid (EPSG:27700), points can be clipped to the bounding box of an object, and RGB is kept.
 
 **Point Cloud panel :** in the *GIS* tab of the sidebar, choose what colors the points: RGB, elevation, intensity, classification (ASPRS palette) or any other attribute, with a color ramp and value range. Point size is set here too.
 

@@ -49,6 +49,7 @@ if HAS_GDAL:
 from ..core import XY as xy
 from ..core.errors import OverlapError
 from ..core.proj import Reproj
+from ..core.proj import osgrid
 
 
 from bpy_extras.io_utils import ImportHelper #helper class defines filename and invoke() function which calls the file selector
@@ -354,6 +355,13 @@ class IMPORTLAZ_OT_georaster(Operator, ImportHelper):
 				source_crs = las_file.header.parse_crs()
 			except (pyproj.exceptions.CRSError, AttributeError):
 				log.warning("Cannot parse CRS from LAS header", exc_info=True)
+			if source_crs is None:
+				# British tiles (e.g. Environment Agency LiDAR) often store no CRS: a file name starting with
+				# an Ordnance Survey grid reference whose square holds the points is British National Grid
+				gridRef = osgrid.matchTile(name, las_file.header.mins, las_file.header.maxs)
+				if gridRef is not None:
+					source_crs = pyproj.CRS.from_epsg(osgrid.EPSG)
+					self.report({'INFO'}, f"No CRS found in {name}, Ordnance Survey tile {gridRef}: using EPSG:{osgrid.EPSG}")
 			if source_crs is None:
 				self.report({'WARNING'}, f"No CRS found in {name}, using {self.customCRS}")
 		is_custom = source_crs is None
